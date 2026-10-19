@@ -1,21 +1,16 @@
-import React, { useEffect } from 'react';
-import { SafeAreaProvider } from 'react-native-safe-area-context';
+import React from 'react';
 import { StatusBar } from 'expo-status-bar';
 import { AuthProvider } from './src/context/AuthContext';
+import { ThemeLanguageProvider } from './src/context/ThemeLanguageContext';
 import AppNavigator from './src/navigation/AppNavigator';
-import { registerForPushNotificationsAsync } from './src/services/NotificationService';
 
 export default function App() {
-  useEffect(() => {
-    registerForPushNotificationsAsync();
-  }, []);
-
   return (
-    <SafeAreaProvider>
+    <ThemeLanguageProvider>
       <AuthProvider>
-        <StatusBar style="auto" />
+        <StatusBar style="dark" />
         <AppNavigator />
       </AuthProvider>
-    </SafeAreaProvider>
+    </ThemeLanguageProvider>
   );
 }
