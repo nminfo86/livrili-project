@@ -1,0 +1,122 @@
+[
+  {
+    "id": "eulma_belaala",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Cité Belaala (El Eulma)",
+    "name_ar": "حي بعلالة - العلمة",
+    "keywords": ["belaala", "belala", "بعلالة", "cité belaala"],
+    "lat": 36.1612,
+    "lon": 5.6845
+  },
+  {
+    "id": "eulma_dubai",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Quartier Dubaï - Rue Commerciale (El Eulma)",
+    "name_ar": "شارع دبي التجاري - العلمة",
+    "keywords": ["dubai", "dubaï", "دبي", "شارع دبي", "marché dubai"],
+    "lat": 36.1554,
+    "lon": 5.6891
+  },
+  {
+    "id": "eulma_centre",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Centre-Ville / Place 1er Novembre (El Eulma)",
+    "name_ar": "وسط المدينة - العلمة",
+    "keywords": ["centre ville", "وسط المدينة", "mairie", "apc el eulma"],
+    "lat": 36.1528,
+    "lon": 5.6902
+  },
+  {
+    "id": "eulma_thabet_bouzid",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Cité Thabet Bouzid (El Eulma)",
+    "name_ar": "حي ثابت بوزيد - العلمة",
+    "keywords": ["thabet bouzid", "tabet bouzid", "ثابت بوزيد"],
+    "lat": 36.1465,
+    "lon": 5.6980
+  },
+  {
+    "id": "eulma_19_juin",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Cité 19 Juin (El Eulma)",
+    "name_ar": "حي 19 جوان - العلمة",
+    "keywords": ["19 juin", "19 جوان", "cite 19 juin"],
+    "lat": 36.1490,
+    "lon": 5.6795
+  },
+  {
+    "id": "eulma_hopital",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Hôpital Saroub Khathir (El Eulma)",
+    "name_ar": "مستشفى صروب خثير - العلمة",
+    "keywords": ["hopital", "hôpital", "saroub", "مستشفى", "صروب خثير"],
+    "lat": 36.1585,
+    "lon": 5.6952
+  },
+  {
+    "id": "eulma_gare_routiere",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Gare Routière (El Eulma)",
+    "name_ar": "المحطة البرية للمسافرين - العلمة",
+    "keywords": ["gare", "station", "routiere", "محطة", "تيرمينوس"],
+    "lat": 36.1432,
+    "lon": 5.6810
+  },
+  {
+    "id": "eulma_800_logts",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Cité 800 Logements / 1000 Logements (El Eulma)",
+    "name_ar": "حي 800 مسكن / 1000 مسكن - العلمة",
+    "keywords": ["800", "1000", "logements", "مسكن", "عدل", "aadl"],
+    "lat": 36.1640,
+    "lon": 5.7025
+  },
+  {
+    "id": "eulma_zone_industrielle",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Zone Industrielle / Route de Batna (El Eulma)",
+    "name_ar": "المنطقة الصناعية / طريق باتنة - العلمة",
+    "keywords": ["zone industrielle", "route de batna", "المنطقة الصناعية", "طريق باتنة"],
+    "lat": 36.1360,
+    "lon": 5.7050
+  },
+  {
+    "id": "eulma_chouf_lekdad",
+    "commune": "El Eulma",
+    "wilaya": "Sétif",
+    "name_fr": "Chouf Lekdad / Sortie Ouest (El Eulma)",
+    "name_ar": "شوف لكداد - العلمة",
+    "keywords": ["chouf lekdad", "شوف لكداد", "route de setif"],
+    "lat": 36.1540,
+    "lon": 5.6580
+  },
+  {
+    "id": "setif_park_mall",
+    "commune": "Sétif",
+    "wilaya": "Sétif",
+    "name_fr": "Park Mall / Ain El Fouara (Sétif)",
+    "name_ar": "بارك مول / عين الفوارة - سطيف",
+    "keywords": ["setif", "sétif", "park mall", "ain fouara", "سطيف", "بارك مول"],
+    "lat": 36.1898,
+    "lon": 5.4095
+  },
+  {
+    "id": "setif_el_hidhab",
+    "commune": "Sétif",
+    "wilaya": "Sétif",
+    "name_fr": "Cité El Hidhab (Sétif)",
+    "name_ar": "حي الهضاب - سطيف",
+    "keywords": ["hidhab", "el hidab", "الهضاب"],
+    "lat": 36.2085,
+    "lon": 5.4350
+  }
+]

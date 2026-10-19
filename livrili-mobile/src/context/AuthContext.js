@@ -1,63 +1,122 @@
 import React, { createContext, useState, useEffect } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import API from '../api/client';
+import apiClient from '../api/client';
 
 export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [activeMode, setActiveMode] = useState('customer');
+  const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    checkExistingAuth();
+    loadStoredUser();
   }, []);
 
-  const checkExistingAuth = async () => {
+  const loadStoredUser = async () => {
     try {
-      const token = await SecureStore.getItemAsync('livrili_token');
-      if (token) {
-        const res = await API.get('auth.php?action=me');
-        if (res.data.success) {
-          setUser(res.data.user);
-          setActiveMode(res.data.user.current_mode || 'customer');
-        } else {
-          await logout();
-        }
+      const savedToken = await SecureStore.getItemAsync('auth_token');
+      const savedUser = await SecureStore.getItemAsync('user_data');
+      if (savedToken && savedUser) {
+        setToken(savedToken);
+        setUser(JSON.parse(savedUser));
       }
     } catch (e) {
-      console.log('Session non restaurée :', e.message);
+      console.log('Error loading auth state:', e);
     } finally {
       setLoading(false);
     }
   };
 
-  const completeLogin = async (token, userData) => {
-    await SecureStore.setItemAsync('livrili_token', token);
-    setUser(userData);
-    setActiveMode(userData.current_mode || 'customer');
+  // Sauvegarde sécurisée sans jamais faire planter SecureStore
+  const saveSession = async (authToken, userData) => {
+    const safeToken = String(authToken || '');
+    const safeUser = userData || {};
+    if (safeToken) {
+      await SecureStore.setItemAsync('auth_token', safeToken);
+      await SecureStore.setItemAsync('userToken', safeToken);
+    }
+    await SecureStore.setItemAsync('user_data', JSON.stringify(safeUser));
+    setToken(safeToken);
+    setUser(safeUser);
   };
 
-  const switchMode = async (targetMode) => {
-    try {
-      const res = await API.post('auth.php?action=switch_mode', { mode: targetMode });
-      if (res.data.success) {
-        setActiveMode(targetMode);
-        setUser((prev) => ({ ...prev, current_mode: targetMode }));
-      }
-    } catch (e) {
-      console.error('Erreur switch mode:', e);
+  // Supporte à la fois login(token, user) ET login(email, password)
+  const login = async (arg1, arg2) => {
+    // Cas 1 : appelé après un appel API déjà fait -> login(token, user)
+    if (typeof arg2 === 'object' && arg2 !== null) {
+      await saveSession(arg1, arg2);
+      return { success: true, user: arg2 };
     }
+    // Cas 2 : appelé avec un seul objet -> login({ token, user })
+    if (typeof arg1 === 'object' && arg1 !== null && (arg1.token || arg1.user)) {
+      await saveSession(arg1.token || arg1.auth_token, arg1.user || arg1);
+      return { success: true, user: arg1.user || arg1 };
+    }
+    // Cas 3 : appelé avec (identifier, password) pour faire la requête API
+    const res = await apiClient.post('/auth.php?action=login', {
+      identifier: arg1,
+      email: arg1,
+      phone: arg1,
+      password: arg2,
+    });
+    if (res.data?.token && res.data?.user) {
+      await saveSession(res.data.token, res.data.user);
+    }
+    return res.data;
+  };
+
+  // Fonction d'inscription directe
+  const register = async (payload) => {
+    const res = await apiClient.post('/auth.php?action=register', payload);
+    if (res.data?.token && res.data?.user) {
+      await saveSession(res.data.token, res.data.user);
+    }
+    return res.data;
+  };
+
+  // Connexion Google
+  const googleLogin = async (googlePayload) => {
+    const res = await apiClient.post('/auth.php?action=google_login', googlePayload);
+    if (res.data?.token && res.data?.user) {
+      await saveSession(res.data.token, res.data.user);
+    }
+    return res.data;
   };
 
   const logout = async () => {
-    await SecureStore.deleteItemAsync('livrili_token');
+    try {
+      await SecureStore.deleteItemAsync('auth_token');
+      await SecureStore.deleteItemAsync('user_data');
+    } catch (e) {}
+    setToken(null);
     setUser(null);
-    setActiveMode('customer');
+  };
+
+  const switchMode = async (newMode) => {
+    if (!user) return;
+    const updatedUser = { ...user, current_mode: newMode };
+    setUser(updatedUser);
+    try {
+      await SecureStore.setItemAsync('user_data', JSON.stringify(updatedUser));
+      await apiClient.post('/auth.php?action=switch_mode', { mode: newMode }).catch(() => {});
+    } catch (e) {}
   };
 
   return (
-    <AuthContext.Provider value={{ user, activeMode, loading, completeLogin, switchMode, logout, setUser }}>
+    <AuthContext.Provider
+      value={{
+        user,
+        token,
+        setUser,
+        loading,
+        login,
+        register,
+        googleLogin,
+        logout,
+        switchMode,
+      }}
+    >
       {children}
     </AuthContext.Provider>
   );

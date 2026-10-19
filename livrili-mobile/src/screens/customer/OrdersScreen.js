@@ -1,126 +1,180 @@
-// src/screens/customer/OrdersScreen.js
-import React, { useState, useEffect } from 'react';
-import { View, Text, FlatList, TouchableOpacity, StyleSheet, Alert, RefreshControl } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import {
+  View,
+  Text,
+  StyleSheet,
+  FlatList,
+  RefreshControl,
+  TouchableOpacity,
+  ActivityIndicator,
+} from 'react-native';
+import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
-import API from '../../api/client';
+import apiClient from '../../api/client';
+import { COLORS, useThemeLang } from '../../context/ThemeLanguageContext';
 
 export default function OrdersScreen() {
+  const { t } = useThemeLang();
   const [orders, setOrders] = useState([]);
+  const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
   const fetchOrders = async () => {
     try {
-      const res = await API.get('customer.php?action=my_orders');
-      if (res.data.success) {
+      const res = await apiClient.get('/customer.php?action=my_orders');
+      if (res.data?.orders) {
         setOrders(res.data.orders);
+      } else if (Array.isArray(res.data)) {
+        setOrders(res.data);
       }
     } catch (e) {
-      console.error(e);
+      console.log('Fetch orders error:', e);
+    } finally {
+      setLoading(false);
+      setRefreshing(false);
     }
   };
 
-  useEffect(() => {
-    fetchOrders();
-  }, []);
+  useFocusEffect(
+    useCallback(() => {
+      fetchOrders();
+    }, [])
+  );
 
-  const onRefresh = async () => {
-    setRefreshing(true);
-    await fetchOrders();
-    setRefreshing(false);
-  };
-
-  const acceptBid = async (orderId, bidId) => {
-    try {
-      const res = await API.post('customer.php?action=accept_bid', { order_id: orderId, bid_id: bidId });
-      if (res.data.success) {
-        Alert.alert('Chauffeur confirmé !', 'Votre coursier est en route vers le point de retrait.');
-        fetchOrders();
-      }
-    } catch (e) {
-      Alert.alert('Erreur', 'Impossible de valider.');
+  const getStatusBadge = (status) => {
+    switch (status) {
+      case 'SEARCHING':
+        return { label: 'Recherche livreur...', bg: '#FEF3C7', color: '#D97706' };
+      case 'DRIVER_ASSIGNED':
+        return { label: 'Livreur en route', bg: '#DBEAFE', color: '#2563EB' };
+      case 'PICKED_UP':
+        return { label: 'Colis récupéré', bg: '#E0E7FF', color: '#4F46E5' };
+      case 'DELIVERED':
+        return { label: 'Livré', bg: '#D1FAE5', color: '#059669' };
+      case 'CANCELLED':
+        return { label: 'Annulé', bg: '#FEE2E2', color: '#DC2626' };
+      default:
+        return { label: status, bg: '#F1F5F9', color: '#475569' };
     }
   };
 
   return (
     <View style={styles.container}>
-      <FlatList
-        data={orders}
-        keyExtractor={item => String(item.id)}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-        ListEmptyComponent={<Text style={styles.empty}>Aucune course en cours aujourd'hui.</Text>}
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <View style={styles.headerRow}>
-              <Text style={styles.orderCode}>Course #{item.code}</Text>
-              <Text style={styles.badgeStatus}>{item.status}</Text>
+      <View style={styles.header}>
+        <Text style={styles.headerTitle}>{t('myBookings')}</Text>
+        <TouchableOpacity onPress={fetchOrders}>
+          <Ionicons name="refresh" size={22} color={COLORS.primary} />
+        </TouchableOpacity>
+      </View>
+
+      {loading ? (
+        <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 40 }} />
+      ) : (
+        <FlatList
+          data={orders}
+          keyExtractor={(item) => String(item.id)}
+          refreshControl={
+            <RefreshControl
+              refreshing={refreshing}
+              onRefresh={() => {
+                setRefreshing(true);
+                fetchOrders();
+              }}
+              colors={[COLORS.primary]}
+            />
+          }
+          contentContainerStyle={{ padding: 16 }}
+          ListEmptyComponent={
+            <View style={styles.emptyBox}>
+              <Ionicons name="cube-outline" size={52} color="#CBD5E1" />
+              <Text style={styles.emptyText}>Aucune course pour le moment</Text>
             </View>
-
-            <Text style={styles.routeText}>📍 {item.pickup_address}</Text>
-            <Text style={styles.routeText}>🏁 {item.delivery_address}</Text>
-
-            {/* Liste des devis des chauffeurs (Style Image 4[cite: 14]) */}
-            {item.status === 'SEARCHING' && item.bids?.length > 0 && (
-              <View style={styles.bidsWrapper}>
-                <Text style={styles.bidsTitle}>Transporteurs disponibles :</Text>
-                {item.bids.map(b => (
-                  <View key={b.bid_id} style={styles.bidCard}>
-                    <View style={styles.driverAvatar}>
-                      <Ionicons name="person" size={24} color="#64748B" />
-                    </View>
-                    <View style={styles.driverInfo}>
-                      <Text style={styles.driverName}>{b.full_name}</Text>
-                      <View style={styles.ratingRow}>
-                        <Ionicons name="star" size={14} color="#F59E0B" />
-                        <Text style={styles.ratingText}>5.0 • {b.moto_brand}</Text>
-                      </View>
-                    </View>
-                    <View style={styles.actionCol}>
-                      <Text style={styles.bidPrice}>{b.bid_amount} DA</Text>
-                      <TouchableOpacity
-                        style={styles.acceptBtn}
-                        onPress={() => acceptBid(item.id, b.bid_id)}
-                      >
-                        <Text style={styles.acceptText}>ACCEPT</Text>
-                      </TouchableOpacity>
-                    </View>
+          }
+          renderItem={({ item }) => {
+            const badge = getStatusBadge(item.status);
+            return (
+              <View style={styles.card}>
+                <View style={styles.cardTop}>
+                  <Text style={styles.orderCode}>#{item.code || item.id}</Text>
+                  <View style={[styles.badge, { backgroundColor: badge.bg }]}>
+                    <Text style={[styles.badgeText, { color: badge.color }]}>
+                      {badge.label}
+                    </Text>
                   </View>
-                ))}
+                </View>
+
+                <View style={styles.routeBox}>
+                  <View style={styles.routeLine}>
+                    <Ionicons name="radio-button-on" size={16} color={COLORS.primary} />
+                    <Text style={styles.addressText} numberOfLines={1}>
+                      {item.pickup_address}
+                    </Text>
+                  </View>
+                  <View style={styles.routeLine}>
+                    <Ionicons name="location" size={16} color={COLORS.secondary} />
+                    <Text style={styles.addressText} numberOfLines={1}>
+                      {item.delivery_address}
+                    </Text>
+                  </View>
+                </View>
+
+                <View style={styles.cardFooter}>
+                  <Text style={styles.vehicleType}>
+                    {String(item.vehicle_type || 'moto').toUpperCase()} • {item.distance_km} km
+                  </Text>
+                  <Text style={styles.priceText}>
+                    {item.agreed_fee > 0 ? item.agreed_fee : item.estimated_price} DA
+                  </Text>
+                </View>
               </View>
-            )}
-          </View>
-        )}
-      />
+            );
+          }}
+        />
+      )}
     </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC', padding: 14 },
-  empty: { textAlign: 'center', marginTop: 40, color: '#94A3B8' },
-  card: { backgroundColor: '#FFFFFF', borderRadius: 16, padding: 16, marginBottom: 12, elevation: 2 },
-  headerRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 8 },
-  orderCode: { fontSize: 15, fontWeight: 'bold', color: '#1E293B' },
-  badgeStatus: { backgroundColor: '#FFF0EC', color: '#FF6B4A', paddingHorizontal: 8, paddingVertical: 4, borderRadius: 6, fontSize: 11, fontWeight: 'bold' },
-  routeText: { fontSize: 13, color: '#475569', marginVertical: 2 },
-  bidsWrapper: { marginTop: 12, borderTopWidth: 1, borderTopColor: '#F1F5F9', paddingTop: 10 },
-  bidsTitle: { fontSize: 13, fontWeight: 'bold', color: '#334155', marginBottom: 8 },
-  bidCard: {
+  container: { flex: 1, backgroundColor: COLORS.background, paddingTop: 44 },
+  header: {
     flexDirection: 'row',
+    justifyContent: 'space-between',
     alignItems: 'center',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 14,
-    padding: 10,
-    marginBottom: 8,
-    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 20,
+    paddingBottom: 12,
   },
-  driverAvatar: { width: 44, height: 44, borderRadius: 22, backgroundColor: '#F1F5F9', justifyContent: 'center', alignItems: 'center' },
-  driverInfo: { flex: 1, marginLeft: 10 },
-  driverName: { fontSize: 14, fontWeight: 'bold', color: '#1E293B' },
-  ratingRow: { flexDirection: 'row', alignItems: 'center', marginTop: 2 },
-  ratingText: { fontSize: 11, color: '#64748B', marginLeft: 4 },
-  actionCol: { alignItems: 'flex-end' },
-  bidPrice: { fontSize: 15, fontWeight: '900', color: '#1E293B', marginBottom: 4 },
-  acceptBtn: { backgroundColor: '#22C55E', paddingHorizontal: 14, paddingVertical: 6, borderRadius: 8 },
-  acceptText: { color: '#FFFFFF', fontWeight: 'bold', fontSize: 12 },
+  headerTitle: { fontSize: 22, fontWeight: '800', color: COLORS.textDark },
+  card: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: COLORS.border,
+  },
+  cardTop: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 12,
+  },
+  orderCode: { fontSize: 15, fontWeight: '800', color: COLORS.textDark },
+  badge: { paddingHorizontal: 10, paddingVertical: 4, borderRadius: 8 },
+  badgeText: { fontSize: 12, fontWeight: '700' },
+  routeBox: { marginBottom: 12 },
+  routeLine: { flexDirection: 'row', alignItems: 'center', marginVertical: 3 },
+  addressText: { marginLeft: 8, fontSize: 13, color: '#334155', flex: 1 },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    paddingTop: 10,
+  },
+  vehicleType: { fontSize: 12, fontWeight: '700', color: COLORS.textMuted },
+  priceText: { fontSize: 16, fontWeight: '800', color: COLORS.primary },
+  emptyBox: { alignItems: 'center', marginTop: 80 },
+  emptyText: { marginTop: 10, color: COLORS.textMuted, fontSize: 14 },
 });
