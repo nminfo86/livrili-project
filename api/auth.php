@@ -337,4 +337,75 @@ if ($action === 'save_push_token') {
     jsonResponse(['success' => false, 'error' => 'Token manquant']);
 }
 
+// -------------------------------------------------------------------------
+// 5. ACTIVATION PROFIL LIVREUR DEPUIS UN COMPTE CLIENT (SettingsScreen)
+// -------------------------------------------------------------------------
+if ($action === 'upgrade_to_driver') {
+    $user = requireAuth($pdo);
+    $commune = trim($input['commune_name'] ?? 'El Eulma');
+    $vType   = trim($input['vehicle_type'] ?? 'moto');
+    $brand   = trim($input['moto_brand'] ?? '');
+    $color   = trim($input['moto_color'] ?? 'Standard');
+    $plate   = trim($input['plate_number'] ?? '');
+    $lat     = (float)($input['latitude'] ?? 36.1528);
+    $lon     = (float)($input['longitude'] ?? 5.6902);
+
+    // Vérifier que le vehicle_type existe dans transport_modes
+    $stmtMode = $pdo->prepare("SELECT id FROM transport_modes WHERE id = :id LIMIT 1");
+    $stmtMode->execute(['id' => $vType]);
+    if (!$stmtMode->fetchColumn()) {
+        $vType = 'moto';
+    }
+
+    $stmtCheck = $pdo->prepare("SELECT id FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
+    $stmtCheck->execute(['uid' => $user['id']]);
+    $existingId = $stmtCheck->fetchColumn();
+
+    if ($existingId) {
+        $pdo->prepare("
+            UPDATE driver_profiles 
+            SET commune_name = :c, vehicle_type = :v, moto_brand = :b, moto_color = :col, plate_number = :p, verification_status = 'approved', is_online = 1
+            WHERE id = :id
+        ")->execute(['c' => $commune, 'v' => $vType, 'b' => $brand, 'col' => $color, 'p' => $plate, 'id' => $existingId]);
+    } else {
+        $pdo->prepare("
+            INSERT INTO driver_profiles (
+                telegram_user_id, full_name, phone, wilaya_code, commune_name,
+                vehicle_type, moto_brand, moto_color, plate_number, photo_moto,
+                verification_status, is_online, rating, created_at
+            ) VALUES (
+                :uid, :name, :phone, 19, :c,
+                :v, :b, :col, :p, '',
+                'approved', 1, 100.00, NOW()
+            )
+        ")->execute([
+            'uid'   => $user['id'],
+            'name'  => $user['full_name'] ?: 'Livreur Livrili',
+            'phone' => $user['phone'] ?: '',
+            'c'     => $commune,
+            'v'     => $vType,
+            'b'     => $brand,
+            'col'   => $color,
+            'p'     => $plate
+        ]);
+    }
+
+    $pdo->prepare("UPDATE telegram_users SET role = 'driver', current_mode = 'driver', commune_name = :c, latitude = :lat, longitude = :lon, gps_updated_at = NOW() WHERE id = :uid")
+        ->execute(['c' => $commune, 'lat' => $lat, 'lon' => $lon, 'uid' => $user['id']]);
+
+    jsonResponse([
+        'success' => true,
+        'user'    => [
+            'id'           => (int)$user['id'],
+            'full_name'    => $user['full_name'],
+            'phone'        => $user['phone'],
+            'email'        => $user['email'],
+            'role'         => 'driver',
+            'current_mode' => 'driver',
+            'commune_name' => $commune,
+            'vehicle_type' => $vType
+        ]
+    ]);
+}
+
 jsonResponse(['success' => false, 'error' => 'Action d\'authentification non reconnue'], 404);

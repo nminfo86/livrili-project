@@ -10,27 +10,31 @@ $input = getJsonInput();
 // 1. INSCRIPTION CHAUFFEUR (Avec téléversement photo du véhicule)
 // -------------------------------------------------------------------------
 if ($action === 'register') {
-    $fullName  = trim($_POST['full_name'] ?? '');
-    $commune   = trim($_POST['commune_name'] ?? 'El Eulma');
-    $vType     = in_array($_POST['vehicle_type'] ?? '', ['moto', 'voiture', 'camionnette', 'fourgon']) ? $_POST['vehicle_type'] : 'moto';
-    $brand     = trim($_POST['brand'] ?? '');
-    $color     = trim($_POST['color'] ?? '');
-    $plate     = trim($_POST['plate_number'] ?? '');
+    $fullName = trim($_POST['full_name'] ?? $input['full_name'] ?? '');
+    $commune  = trim($_POST['commune_name'] ?? $input['commune_name'] ?? 'El Eulma');
+    $vType    = trim($_POST['vehicle_type'] ?? $input['vehicle_type'] ?? 'moto');
+    $brand    = trim($_POST['brand'] ?? $input['brand'] ?? '');
+    $color    = trim($_POST['color'] ?? $input['color'] ?? '');
+    $plate    = trim($_POST['plate_number'] ?? $input['plate_number'] ?? '');
 
     if (!$fullName || !$brand || !$color || !$plate) {
         jsonResponse(['success' => false, 'error' => 'Informations du véhicule et nom complet obligatoires']);
     }
 
-    // Vérifier si un profil existe déjà
+    // Vérifier que le vehicle_type existe dans transport_modes
+    $stmtMode = $pdo->prepare("SELECT id FROM transport_modes WHERE id = :id LIMIT 1");
+    $stmtMode->execute(['id' => $vType]);
+    if (!$stmtMode->fetchColumn()) {
+        $vType = 'moto';
+    }
+
     $stmtCheck = $pdo->prepare("SELECT id, verification_status FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
     $stmtCheck->execute(['uid' => $user['id']]);
     $existing = $stmtCheck->fetch();
-
     if ($existing) {
         jsonResponse(['success' => false, 'error' => 'Votre dossier est déjà enregistré (Statut: ' . $existing['verification_status'] . ')']);
     }
 
-    // Gestion du fichier photo
     $relPath = '';
     if (isset($_FILES['photo']) && $_FILES['photo']['error'] === UPLOAD_ERR_OK) {
         $ext = strtolower(pathinfo($_FILES['photo']['name'], PATHINFO_EXTENSION));
@@ -50,14 +54,14 @@ if ($action === 'register') {
             ) VALUES (
                 :uid, :name, :phone, 19, :commune,
                 :vtype, :brand, :color, :plate, :photo,
-                'pending', 0, 100.00, NOW()
+                'approved', 1, 100.00, NOW()
             )";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute([
         'uid'     => $user['id'],
         'name'    => $fullName,
-        'phone'   => $user['phone'],
+        'phone'   => $user['phone'] ?? '',
         'commune' => $commune,
         'vtype'   => $vType,
         'brand'   => $brand,
@@ -66,40 +70,65 @@ if ($action === 'register') {
         'photo'   => $relPath
     ]);
 
-    // Passer le rôle utilisateur à driver
-    $pdo->prepare("UPDATE telegram_users SET role = 'driver' WHERE id = :id")->execute(['id' => $user['id']]);
+    $pdo->prepare("UPDATE telegram_users SET role = 'driver', current_mode = 'driver' WHERE id = :id")
+        ->execute(['id' => $user['id']]);
 
-    jsonResponse(['success' => true, 'message' => 'Dossier transmis pour validation administrative']);
+    jsonResponse(['success' => true, 'message' => 'Compte livreur activé avec succès']);
 }
 
-// Vérification que l'utilisateur a un profil chauffeur pour les actions suivantes
+// Récupération du profil chauffeur pour les actions suivantes
 $stmtD = $pdo->prepare("SELECT * FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
 $stmtD->execute(['uid' => $user['id']]);
 $driver = $stmtD->fetch(PDO::FETCH_ASSOC);
 
-if (!$driver || $driver['verification_status'] !== 'approved') {
-    jsonResponse(['success' => false, 'error' => 'Compte chauffeur non approuvé'], 403);
+if (!$driver) {
+    jsonResponse(['success' => false, 'error' => 'Aucun profil livreur trouvé pour ce compte.'], 403);
+}
+
+if ($driver['verification_status'] === 'rejected') {
+    jsonResponse(['success' => false, 'error' => 'Votre compte chauffeur a été refusé.'], 403);
 }
 
 // -------------------------------------------------------------------------
-// 2. MISE À JOUR GPS EN ARRIÈRE-PLAN (Toutes les 59 secondes)
+// 1b. STATUT & BASCULE EN LIGNE / HORS LIGNE (Dashboard)
+// -------------------------------------------------------------------------
+if ($action === 'status') {
+    $stmtDeliv = $pdo->prepare("SELECT COUNT(*) FROM parcel_orders WHERE selected_driver_id = :did AND status = 'DELIVERED'");
+    $stmtDeliv->execute(['did' => $driver['id']]);
+    $deliveredCount = (int)$stmtDeliv->fetchColumn();
+
+    jsonResponse([
+        'success'             => true,
+        'is_online'           => (int)$driver['is_online'],
+        'rating'              => (float)$driver['rating'],
+        'verification_status' => $driver['verification_status'],
+        'vehicle_type'        => $driver['vehicle_type'],
+        'delivered_count'     => $deliveredCount
+    ]);
+}
+
+if ($action === 'toggle_online') {
+    $isOnline = !empty($input['is_online']) ? 1 : 0;
+    $pdo->prepare("UPDATE driver_profiles SET is_online = :on WHERE id = :did")
+        ->execute(['on' => $isOnline, 'did' => $driver['id']]);
+    jsonResponse(['success' => true, 'is_online' => $isOnline]);
+}
+
+// -------------------------------------------------------------------------
+// 2. MISE À JOUR GPS (Accepte lat/lon OU latitude/longitude)
 // -------------------------------------------------------------------------
 if ($action === 'update_gps') {
-    $lat = (float)($input['lat'] ?? 0);
-    $lon = (float)($input['lon'] ?? 0);
+    $lat = (float)($input['lat'] ?? $input['latitude'] ?? 0);
+    $lon = (float)($input['lon'] ?? $input['longitude'] ?? 0);
 
     if ($lat && $lon) {
         $stmtGps = $pdo->prepare("
             UPDATE telegram_users 
             SET latitude = :lat, longitude = :lon, gps_updated_at = NOW() 
-            WHERE id = :id 
-              AND (gps_updated_at IS NULL OR gps_updated_at <= (NOW() - INTERVAL 59 SECOND))
+            WHERE id = :id
         ");
         $stmtGps->execute(['lat' => $lat, 'lon' => $lon, 'id' => $user['id']]);
-
-        // Maintien automatique du chauffeur en ligne
         $pdo->prepare("UPDATE driver_profiles SET is_online = 1 WHERE id = :did")->execute(['did' => $driver['id']]);
-
         jsonResponse(['success' => true]);
     }
     jsonResponse(['success' => false, 'error' => 'Coordonnées GPS invalides']);
@@ -109,24 +138,46 @@ if ($action === 'update_gps') {
 // 3. POOL DES DEMANDES DISPONIBLES DANS LE SECTEUR
 // -------------------------------------------------------------------------
 if ($action === 'pool') {
-    $sql = "SELECT id, code, pickup_address, delivery_address, estimated_price, distance_km, 
-                   is_round_trip, parcel_description, DATE_FORMAT(created_at, '%H:%i') as time
-            FROM parcel_orders
-            WHERE status = 'SEARCHING'
-              AND pickup_commune = :commune
-              AND FIND_IN_SET(:vtype, vehicle_type) > 0
-              AND created_at >= (NOW() - INTERVAL 3 HOUR)
-              AND id NOT IN (SELECT parcel_order_id FROM parcel_bids WHERE driver_id = :did)
-            ORDER BY id DESC LIMIT 20";
+    $drvLat = (float)($user['latitude'] ?? 36.1528);
+    $drvLon = (float)($user['longitude'] ?? 5.6902);
+
+    $sql = "SELECT po.id, po.code, po.pickup_address, po.delivery_address, po.estimated_price, po.distance_km, 
+                   po.is_round_trip, po.parcel_description, po.vehicle_type,
+                   DATE_FORMAT(po.created_at, '%H:%i') as time,
+                   tm.bid_step
+            FROM parcel_orders po
+            LEFT JOIN transport_modes tm ON po.vehicle_type = tm.id
+            WHERE po.status = 'SEARCHING'
+              AND po.vehicle_type = :vtype
+              AND po.created_at >= (NOW() - INTERVAL 12 HOUR)
+              AND (
+                  LOWER(TRIM(po.pickup_commune)) = LOWER(TRIM(:commune))
+                  OR (
+                      6371 * acos(
+                          LEAST(1.0, GREATEST(-1.0,
+                              cos(radians(:lat)) * cos(radians(po.pickup_lat)) * cos(radians(po.pickup_lon) - radians(:lon))
+                              + sin(radians(:lat)) * sin(radians(po.pickup_lat))
+                          ))
+                      )
+                  ) <= 15.0
+              )
+              AND po.id NOT IN (SELECT parcel_order_id FROM parcel_bids WHERE driver_id = :did)
+            ORDER BY po.id DESC LIMIT 30";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute([
-        'commune' => $driver['commune_name'],
+        'commune' => $driver['commune_name'] ?: 'El Eulma',
         'vtype'   => $driver['vehicle_type'],
+        'lat'     => $drvLat,
+        'lon'     => $drvLon,
         'did'     => $driver['id']
     ]);
 
-    jsonResponse(['success' => true, 'pool' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
+    jsonResponse([
+        'success'      => true,
+        'driver_vtype' => $driver['vehicle_type'],
+        'pool'         => $stmt->fetchAll(PDO::FETCH_ASSOC)
+    ]);
 }
 
 // -------------------------------------------------------------------------
@@ -136,7 +187,6 @@ if ($action === 'submit_bid') {
     $orderId = (int)($input['order_id'] ?? 0);
     $amount  = (float)($input['amount'] ?? 0);
 
-    // Vérifier si le chauffeur est déjà en cours de livraison aujourd'hui
     $stmtBusy = $pdo->prepare("
         SELECT COUNT(*) FROM parcel_orders 
         WHERE selected_driver_id = :did 
@@ -159,19 +209,19 @@ if ($action === 'submit_bid') {
         $pdo->prepare("INSERT INTO parcel_bids (parcel_order_id, driver_id, bid_amount, status, created_at) VALUES (:oid, :did, :amt, 'pending', NOW())")
             ->execute(['oid' => $orderId, 'did' => $driver['id'], 'amt' => $amount]);
     }
-    // Récupérer le push_token du client expéditeur
+
     $stmtClient = $pdo->prepare("
-    SELECT tu.push_token 
-    FROM parcel_orders po
-    JOIN telegram_users tu ON po.sender_telegram_id = tu.id
-    WHERE po.id = :oid
-");
+        SELECT tu.push_token 
+        FROM parcel_orders po
+        JOIN telegram_users tu ON po.sender_telegram_id = tu.id
+        WHERE po.id = :oid
+    ");
     $stmtClient->execute(['oid' => $orderId]);
     $clientToken = $stmtClient->fetchColumn();
 
     sendPushNotification(
         $clientToken,
-        "💰 Nouvelle offre de prix reçue !",
+        "💵 Nouvelle offre de prix reçue !",
         "Un chauffeur propose {$amount} DA pour votre course.",
         ['type' => 'new_bid', 'order_id' => $orderId]
     );
@@ -189,7 +239,6 @@ if ($action === 'active_orders') {
             ORDER BY updated_at ASC";
     $stmt = $pdo->prepare($sql);
     $stmt->execute(['did' => $driver['id']]);
-
     jsonResponse(['success' => true, 'active_orders' => $stmt->fetchAll(PDO::FETCH_ASSOC)]);
 }
 
@@ -198,7 +247,7 @@ if ($action === 'active_orders') {
 // -------------------------------------------------------------------------
 if ($action === 'update_step') {
     $orderId = (int)($input['order_id'] ?? 0);
-    $step    = trim($input['step'] ?? ''); // 'PICKED_UP' ou 'DELIVERED'
+    $step    = trim($input['step'] ?? '');
 
     if ($step === 'PICKED_UP') {
         $pdo->prepare("UPDATE parcel_orders SET status = 'PICKED_UP', picked_up_at = NOW() WHERE id = :oid AND selected_driver_id = :did")
@@ -207,7 +256,6 @@ if ($action === 'update_step') {
         $pdo->prepare("UPDATE parcel_orders SET status = 'DELIVERED', delivered_at = NOW() WHERE id = :oid AND selected_driver_id = :did")
             ->execute(['oid' => $orderId, 'did' => $driver['id']]);
     }
-
     jsonResponse(['success' => true]);
 }
 

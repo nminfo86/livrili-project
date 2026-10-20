@@ -1,3 +1,4 @@
+// src/screens/customer/NewOrderScreen.js
 import React, { useState, useEffect, useRef } from 'react';
 import {
   View,
@@ -21,30 +22,42 @@ import { useThemeLang, COLORS } from '../../context/ThemeLanguageContext';
 import apiClient from '../../api/client';
 import localLocations from '../../data/algeriaLocations.json';
 
-// Modes de transport compacts (Icône + Petit titre)
-const VEHICLES = [
+// Liste par défaut en fallback si hors-ligne avant le chargement BDD
+const DEFAULT_VEHICLES = [
   {
     id: 'moto',
     icon: 'motorbike',
-    shortTitle: 'Moto',
-    basePrice: 200,
-    perKm: 50,
-    color: '#006233',
+    title_fr: 'Moto',
+    pricing_mode: 'per_km',
+    base_price: 200,
+    base_km: 2,
+    commune_max_km: 5,
+    per_km: 50,
+    round_trip_multiplier: 1.6,
+    color: COLORS.primary,
   },
   {
     id: 'camionnette',
     icon: 'truck-flatbed',
-    shortTitle: 'Harbin / Chana',
-    basePrice: 600,
-    perKm: 100,
+    title_fr: 'Harbin / Chana',
+    pricing_mode: 'flat_commune',
+    base_price: 600,
+    base_km: 2,
+    commune_max_km: 5,
+    per_km: 100,
+    round_trip_multiplier: 1.5,
     color: '#D97706',
   },
   {
     id: 'fourgon',
     icon: 'truck-delivery',
-    shortTitle: 'Fourgon',
-    basePrice: 900,
-    perKm: 150,
+    title_fr: 'Fourgon',
+    pricing_mode: 'flat_commune',
+    base_price: 900,
+    base_km: 2,
+    commune_max_km: 5,
+    per_km: 150,
+    round_trip_multiplier: 1.5,
     color: '#4F46E5',
   },
 ];
@@ -62,9 +75,11 @@ export default function NewOrderScreen({ navigation }) {
   const { t, lang } = useThemeLang();
   const webViewRef = useRef(null);
 
+  const [vehicles, setVehicles] = useState(DEFAULT_VEHICLES);
   const [pickupCoords, setPickupCoords] = useState({ lat: 36.1528, lon: 5.6902 });
   const [deliveryCoords, setDeliveryCoords] = useState(null);
   const [pickupCommune, setPickupCommune] = useState('El Eulma');
+  const [deliveryCommune, setDeliveryCommune] = useState('El Eulma');
 
   const [pickupText, setPickupText] = useState('El Eulma, Centre');
   const [destinationText, setDestinationText] = useState('');
@@ -83,12 +98,22 @@ export default function NewOrderScreen({ navigation }) {
   const [paymentBy, setPaymentBy] = useState('sender');
   const [submitting, setSubmitting] = useState(false);
 
+  // État pour mettre le bouton INFOS COLIS en rouge si non renseigné ou invalide
+  const [parcelInfoAlert, setParcelInfoAlert] = useState(false);
+  const [phoneErrorText, setPhoneErrorText] = useState('');
+
+  // Validation téléphone mobile algérien : 05, 06 ou 07 suivi de 8 chiffres (10 chiffres)
+  const isValidAlgerianMobile = (phoneStr) => {
+    const clean = String(phoneStr || '').replace(/\s+/g, '');
+    return /^(05|06|07)[0-9]{8}$/.test(clean);
+  };
+
   useEffect(() => {
+    fetchTransportModes();
     (async () => {
       try {
         let { status } = await Location.requestForegroundPermissionsAsync();
         if (status !== 'granted') return;
-
         let loc = await Location.getCurrentPositionAsync({});
         const { latitude, longitude } = loc.coords;
         setPickupCoords({ lat: latitude, lon: longitude });
@@ -98,6 +123,22 @@ export default function NewOrderScreen({ navigation }) {
       }
     })();
   }, []);
+
+  const fetchTransportModes = async () => {
+    try {
+      const res = await apiClient.get('customer.php?action=get_transport_modes');
+      if (
+        res.data?.success &&
+        Array.isArray(res.data.transport_modes) &&
+        res.data.transport_modes.length > 0
+      ) {
+        setVehicles(res.data.transport_modes);
+        setSelectedVehicle(res.data.transport_modes[0].id);
+      }
+    } catch (e) {
+      console.log('Fallback transport modes:', e.message);
+    }
+  };
 
   useEffect(() => {
     if (pickupCoords && deliveryCoords) {
@@ -111,7 +152,7 @@ export default function NewOrderScreen({ navigation }) {
           Math.sin(dLon / 2) *
           Math.sin(dLon / 2);
       const c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
-      const d = Math.max(1, parseFloat((R * c * 1.25).toFixed(1)));
+      const d = Math.max(1, parseFloat((R * c * 1.3).toFixed(1)));
       setDistanceKm(d);
     }
     updateMapMarkers();
@@ -139,6 +180,7 @@ export default function NewOrderScreen({ navigation }) {
           setPickupCommune(commune);
         } else {
           setDestinationText(shortName);
+          setDeliveryCommune(commune);
         }
       }
     } catch (err) {}
@@ -147,10 +189,9 @@ export default function NewOrderScreen({ navigation }) {
   const searchAlgerianAddress = async (query, type) => {
     if (type === 'pickup') setPickupText(query);
     else setDestinationText(query);
-
     setActiveInput(type);
-    const cleanQuery = query.trim().toLowerCase();
 
+    const cleanQuery = query.trim().toLowerCase();
     if (cleanQuery.length === 0) {
       const popular = localLocations.slice(0, 6).map((loc) => ({
         place_id: loc.id,
@@ -179,7 +220,7 @@ export default function NewOrderScreen({ navigation }) {
         place_id: loc.id,
         display_name:
           lang === 'ar' || lang === 'dz'
-            ? `${loc.name_ar} • ${loc.name_fr}`
+            ? `${loc.name_ar} - ${loc.name_fr}`
             : `${loc.name_fr} - ${loc.name_ar}`,
         lat: loc.lat,
         lon: loc.lon,
@@ -188,7 +229,6 @@ export default function NewOrderScreen({ navigation }) {
       }));
 
     setSuggestions(matchedLocal);
-
     if (cleanQuery.length < 3) return;
 
     setSearchingAddress(true);
@@ -225,7 +265,6 @@ export default function NewOrderScreen({ navigation }) {
   const handleSelectSuggestion = (item) => {
     const lat = parseFloat(item.lat);
     const lon = parseFloat(item.lon);
-
     if (activeInput === 'pickup') {
       setPickupText(item.display_name);
       setPickupCoords({ lat, lon });
@@ -233,6 +272,7 @@ export default function NewOrderScreen({ navigation }) {
     } else {
       setDestinationText(item.display_name);
       setDeliveryCoords({ lat, lon });
+      if (item.commune) setDeliveryCommune(item.commune);
     }
     setSuggestions([]);
     setActiveInput(null);
@@ -253,11 +293,67 @@ export default function NewOrderScreen({ navigation }) {
     `);
   };
 
+  // Arrondi vers les 50 DA suivants si dépassement > 10 DA
+  const roundToNext50After10 = (rawPrice, minPrice) => {
+    if (rawPrice <= minPrice) {
+      return Math.ceil((minPrice - 10) / 50) * 50;
+    }
+    const rounded = Math.ceil((rawPrice - 10) / 50) * 50;
+    return Math.max(minPrice, rounded);
+  };
+
   const calculateEstimatedPrice = (vehicle) => {
-    const extraKm = Math.max(0, distanceKm - 2);
-    let total = vehicle.basePrice + extraKm * vehicle.perKm;
-    if (isRoundTrip) total *= 1.5;
-    return Math.round(total / 10) * 10;
+    const basePrice = Number(vehicle.base_price ?? vehicle.basePrice ?? 200);
+    const baseKm = Number(vehicle.base_km ?? 2.0);
+    const communeMaxKm = Number(vehicle.commune_max_km ?? 5.0);
+    const perKm = Number(vehicle.per_km ?? vehicle.perKm ?? 50);
+    const rtMult = Number(vehicle.round_trip_multiplier ?? 1.6);
+    const pricingMode = vehicle.pricing_mode || 'per_km';
+
+    const sameCommune =
+      !deliveryCommune ||
+      pickupCommune.trim().toLowerCase() === deliveryCommune.trim().toLowerCase();
+
+    let rawTotal = basePrice;
+
+    if (pricingMode === 'flat_commune') {
+      if (sameCommune && distanceKm <= communeMaxKm) {
+        rawTotal = basePrice;
+      } else {
+        const extraKm = Math.max(0, distanceKm - communeMaxKm);
+        rawTotal = basePrice + extraKm * perKm;
+      }
+      if (isRoundTrip) {
+        rawTotal *= rtMult;
+      }
+    } else {
+      const routeDist = isRoundTrip ? distanceKm * 2 : distanceKm;
+      if (routeDist <= baseKm) {
+        rawTotal = basePrice;
+      } else {
+        rawTotal = basePrice + (routeDist - baseKm) * perKm;
+      }
+      if (isRoundTrip && rawTotal <= basePrice) {
+        rawTotal = basePrice * rtMult;
+      }
+    }
+
+    return roundToNext50After10(rawTotal, basePrice);
+  };
+
+  const handleValidateModal = () => {
+    if (!isValidAlgerianMobile(recipientPhone)) {
+      setPhoneErrorText('Numéro obligatoire : doit commencer par 05, 06 ou 07 (10 chiffres).');
+      setParcelInfoAlert(true);
+      Alert.alert(
+        'Numéro invalide',
+        'Veuillez saisir un numéro de téléphone mobile algérien valide pour le destinataire (05, 06 ou 07 suivi de 8 chiffres).'
+      );
+      return;
+    }
+    setPhoneErrorText('');
+    setParcelInfoAlert(false);
+    setDetailsModalVisible(false);
   };
 
   const handleCreateOrder = async () => {
@@ -266,7 +362,27 @@ export default function NewOrderScreen({ navigation }) {
       return;
     }
 
+    if (!isValidAlgerianMobile(recipientPhone)) {
+      setParcelInfoAlert(true);
+      setPhoneErrorText('Le numéro du destinataire (05 / 06 / 07) est obligatoire.');
+      Alert.alert(
+        'Infos Colis manquantes',
+        'Veuillez renseigner le numéro de téléphone du destinataire (05, 06 ou 07) dans "+ INFOS COLIS" avant de commander.',
+        [
+          {
+            text: 'Remplir Infos Colis',
+            onPress: () => setDetailsModalVisible(true),
+          },
+        ]
+      );
+      return;
+    }
+
+    setParcelInfoAlert(false);
+
     let finalDeliveryCoords = deliveryCoords;
+    let finalDelivCommune = deliveryCommune || pickupCommune;
+
     if (!finalDeliveryCoords) {
       const q = destinationText.trim().toLowerCase();
       const foundLocal = localLocations.find(
@@ -277,6 +393,7 @@ export default function NewOrderScreen({ navigation }) {
       );
       if (foundLocal) {
         finalDeliveryCoords = { lat: foundLocal.lat, lon: foundLocal.lon };
+        finalDelivCommune = foundLocal.commune || pickupCommune;
       } else {
         finalDeliveryCoords = {
           lat: pickupCoords.lat + 0.01,
@@ -287,8 +404,9 @@ export default function NewOrderScreen({ navigation }) {
 
     setSubmitting(true);
     try {
-      const vObj = VEHICLES.find((v) => v.id === selectedVehicle) || VEHICLES[0];
+      const vObj = vehicles.find((v) => v.id === selectedVehicle) || vehicles[0];
       const estimatedPrice = calculateEstimatedPrice(vObj);
+
       const finalDescription = parcelDescription.trim()
         ? `${selectedParcelType} - ${parcelDescription.trim()}`
         : selectedParcelType;
@@ -300,8 +418,9 @@ export default function NewOrderScreen({ navigation }) {
         pickup_address: pickupText || 'El Eulma',
         delivery_lat: finalDeliveryCoords.lat,
         delivery_lon: finalDeliveryCoords.lon,
+        delivery_commune: finalDelivCommune,
         delivery_address: destinationText.trim(),
-        recipient_phone: recipientPhone || '',
+        recipient_phone: recipientPhone.replace(/\s+/g, ''),
         payment_by: paymentBy,
         is_round_trip: isRoundTrip ? 1 : 0,
         vehicle_type: selectedVehicle,
@@ -311,12 +430,19 @@ export default function NewOrderScreen({ navigation }) {
       });
 
       if (response.data?.success || response.data?.order_id || response.status === 200) {
-        Alert.alert('Commande envoyée !', 'Les livreurs à proximité ont reçu votre demande.');
+        Alert.alert(
+          'Recherche de livreurs...',
+          'Votre demande est enregistrée. Le système est en train de chercher des livreurs proches de vous...'
+        );
         setDestinationText('');
         setDeliveryCoords(null);
+        setParcelDescription('');
         navigation.navigate('Orders');
       } else {
-        Alert.alert('Info', response.data?.error || response.data?.message || 'Commande créée.');
+        Alert.alert(
+          'Info',
+          response.data?.error || response.data?.message || 'Erreur lors de la création.'
+        );
       }
     } catch (error) {
       Alert.alert(
@@ -330,6 +456,9 @@ export default function NewOrderScreen({ navigation }) {
       setSubmitting(false);
     }
   };
+
+  const primaryColorHex = COLORS.primary || '#006233';
+  const secondaryColorHex = COLORS.secondary || '#D21034';
 
   const leafletHtml = `
     <!DOCTYPE html>
@@ -349,23 +478,24 @@ export default function NewOrderScreen({ navigation }) {
     <body>
       <div id="map"></div>
       <script>
-        var map = L.map('map', { zoomControl: false }).setView([36.1528, 5.6902], 14);
+        var PRIMARY_COLOR = "${primaryColorHex}";
+        var SECONDARY_COLOR = "${secondaryColorHex}";
 
+        var map = L.map('map', { zoomControl: false }).setView([36.1528, 5.6902], 14);
         L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', {
           maxZoom: 20
         }).addTo(map);
-
         setTimeout(function() { map.invalidateSize(); }, 300);
 
         var greenIcon = L.divIcon({
-          html: '<div style="width:18px;height:18px;background:#006233;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.45);"></div>',
+          html: '<div style="width:18px;height:18px;background:' + PRIMARY_COLOR + ';border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.45);"></div>',
           className: '',
           iconSize: [22, 22],
           iconAnchor: [11, 11]
         });
 
         var redPinIcon = L.divIcon({
-          html: '<div style="width:24px;height:24px;background:#D21034;border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 8px rgba(0,0,0,0.5);"></div>',
+          html: '<div style="width:24px;height:24px;background:' + SECONDARY_COLOR + ';border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 8px rgba(0,0,0,0.5);"></div>',
           className: '',
           iconSize: [26, 26],
           iconAnchor: [13, 26]
@@ -401,8 +531,7 @@ export default function NewOrderScreen({ navigation }) {
               routeLine = L.polyline([
                 [data.pickup.lat, data.pickup.lon],
                 [data.delivery.lat, data.delivery.lon]
-              ], { color: '#006233', weight: 5, dashArray: '8, 8' }).addTo(map);
-
+              ], { color: PRIMARY_COLOR, weight: 5, dashArray: '8, 8' }).addTo(map);
               map.fitBounds([
                 [data.pickup.lat, data.pickup.lon],
                 [data.delivery.lat, data.delivery.lon]
@@ -417,9 +546,11 @@ export default function NewOrderScreen({ navigation }) {
     </html>
   `;
 
+  const isPhoneComplete = isValidAlgerianMobile(recipientPhone);
+
   return (
     <View style={styles.container}>
-      {/* CARTE PLEIN ÉCRAN (70% DE L'ÉCRAN) */}
+      {/* CARTE PLEIN ÉCRAN */}
       <View style={styles.mapContainer}>
         <WebView
           ref={webViewRef}
@@ -452,7 +583,6 @@ export default function NewOrderScreen({ navigation }) {
             <View style={styles.verticalLine} />
             <View style={styles.redSquare} />
           </View>
-
           <View style={styles.inputsColumn}>
             <View style={styles.inputRow}>
               <TextInput
@@ -473,9 +603,7 @@ export default function NewOrderScreen({ navigation }) {
                 <Ionicons name="locate" size={19} color={COLORS.primary} />
               </TouchableOpacity>
             </View>
-
             <View style={styles.divider} />
-
             <View style={styles.inputRow}>
               <TextInput
                 style={styles.addressInput}
@@ -510,7 +638,6 @@ export default function NewOrderScreen({ navigation }) {
                 <Ionicons name="close" size={18} color="#64748B" />
               </TouchableOpacity>
             </View>
-
             <FlatList
               data={suggestions}
               keyExtractor={(item, idx) => String(item.place_id || idx)}
@@ -535,7 +662,7 @@ export default function NewOrderScreen({ navigation }) {
         )}
       </View>
 
-      {/* PANNEAU DU BAS ULTRA-COMPACT : TYPE D'OBJET + ICÔNES VÉHICULES CÔTE À CÔTE */}
+      {/* PANNEAU DU BAS */}
       <View style={styles.bottomSheet}>
         <View style={styles.sheetHandle} />
 
@@ -568,11 +695,15 @@ export default function NewOrderScreen({ navigation }) {
           })}
         </ScrollView>
 
-        {/* 2. CHOIX DU VÉHICULE : ICÔNES + PETIT TITRE EN LIGNE HORIZONTALE */}
+        {/* 2. CHOIX DYNAMIQUE DU VÉHICULE DEPUIS LA BDD */}
         <View style={styles.vehiclesGridRow}>
-          {VEHICLES.map((v) => {
+          {vehicles.map((v) => {
             const isSelected = selectedVehicle === v.id;
             const estPrice = calculateEstimatedPrice(v);
+            const title =
+              (lang === 'ar' || lang === 'dz') && v.title_ar
+                ? v.title_ar
+                : v.title_fr || v.shortTitle;
             return (
               <TouchableOpacity
                 key={v.id}
@@ -581,12 +712,12 @@ export default function NewOrderScreen({ navigation }) {
                 style={[styles.vehicleCompactBox, isSelected && styles.vehicleCompactBoxSelected]}
               >
                 <MaterialCommunityIcons
-                  name={v.icon}
+                  name={v.icon || 'motorbike'}
                   size={30}
-                  color={isSelected ? COLORS.primary : v.color}
+                  color={isSelected ? COLORS.primary : v.color || COLORS.primary}
                 />
                 <Text style={styles.vehicleSmallTitle} numberOfLines={1}>
-                  {v.shortTitle}
+                  {title}
                 </Text>
                 <Text style={styles.vehicleSmallPrice}>{estPrice} DA</Text>
               </TouchableOpacity>
@@ -597,11 +728,34 @@ export default function NewOrderScreen({ navigation }) {
         {/* 3. BOUTONS D'ACTION */}
         <View style={styles.actionButtonsRow}>
           <TouchableOpacity
-            style={styles.bookLaterBtn}
+            style={[
+              styles.bookLaterBtn,
+              parcelInfoAlert && styles.bookLaterBtnAlert,
+              isPhoneComplete && !parcelInfoAlert && styles.bookLaterBtnValid,
+            ]}
             onPress={() => setDetailsModalVisible(true)}
           >
-            <Ionicons name="options-outline" size={16} color="#0F172A" />
-            <Text style={styles.bookLaterText}> + INFOS COLIS</Text>
+            <Ionicons
+              name={
+                parcelInfoAlert
+                  ? 'alert-circle'
+                  : isPhoneComplete
+                  ? 'checkmark-circle'
+                  : 'options-outline'
+              }
+              size={17}
+              color={parcelInfoAlert ? '#FFFFFF' : isPhoneComplete ? COLORS.primary : '#0F172A'}
+            />
+            <Text
+              style={[
+                styles.bookLaterText,
+                parcelInfoAlert && { color: '#FFFFFF' },
+                isPhoneComplete && !parcelInfoAlert && { color: COLORS.primary },
+              ]}
+            >
+              {' '}
+              + INFOS COLIS
+            </Text>
           </TouchableOpacity>
 
           <TouchableOpacity
@@ -620,32 +774,50 @@ export default function NewOrderScreen({ navigation }) {
         </View>
       </View>
 
-      {/* MODAL OPTIONS SUPPLÉMENTAIRES DU COLIS */}
+      {/* MODAL INFOS COLIS */}
       <Modal visible={detailsModalVisible} animationType="slide" transparent>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Options de livraison</Text>
+              <Text style={styles.modalTitle}>Infos Colis & Destinataire</Text>
               <TouchableOpacity onPress={() => setDetailsModalVisible(false)}>
                 <Ionicons name="close" size={24} color={COLORS.textDark} />
               </TouchableOpacity>
             </View>
 
-            <Text style={styles.inputLabel}>Précisions sur l'objet ({selectedParcelType})</Text>
+            <Text style={styles.inputLabel}>
+              Téléphone du destinataire{' '}
+              <Text style={{ color: COLORS.secondary }}>* (Obligatoire)</Text>
+            </Text>
+            <TextInput
+              style={[
+                styles.modalInput,
+                phoneErrorText ? { borderColor: COLORS.secondary, backgroundColor: '#FEF2F2' } : null,
+              ]}
+              placeholder="Ex: 0550123456 (05, 06 ou 07)"
+              keyboardType="phone-pad"
+              maxLength={10}
+              value={recipientPhone}
+              onChangeText={(txt) => {
+                const cleaned = txt.replace(/[^0-9]/g, '');
+                setRecipientPhone(cleaned);
+                if (isValidAlgerianMobile(cleaned)) {
+                  setPhoneErrorText('');
+                  setParcelInfoAlert(false);
+                }
+              }}
+            />
+            {phoneErrorText ? <Text style={styles.errorHelper}>{phoneErrorText}</Text> : null}
+
+            <Text style={styles.inputLabel}>
+              Précisions sur l'objet ({selectedParcelType}){' '}
+              <Text style={{ color: '#64748B', fontWeight: '400' }}>(Facultatif)</Text>
+            </Text>
             <TextInput
               style={styles.modalInput}
-              placeholder="Ex: Fragile, 2 cartons, appeler en arrivant..."
+              placeholder="Facultatif : Fragile, 2 cartons, appeler en arrivant..."
               value={parcelDescription}
               onChangeText={setParcelDescription}
-            />
-
-            <Text style={styles.inputLabel}>Téléphone du destinataire</Text>
-            <TextInput
-              style={styles.modalInput}
-              placeholder={t('recipientPhonePlaceholder')}
-              keyboardType="phone-pad"
-              value={recipientPhone}
-              onChangeText={setRecipientPhone}
             />
 
             <View style={styles.switchRow}>
@@ -671,7 +843,6 @@ export default function NewOrderScreen({ navigation }) {
                   {t('payBySender')}
                 </Text>
               </TouchableOpacity>
-
               <TouchableOpacity
                 style={[
                   styles.paymentChip,
@@ -690,10 +861,7 @@ export default function NewOrderScreen({ navigation }) {
               </TouchableOpacity>
             </View>
 
-            <TouchableOpacity
-              style={styles.modalSaveBtn}
-              onPress={() => setDetailsModalVisible(false)}
-            >
+            <TouchableOpacity style={styles.modalSaveBtn} onPress={handleValidateModal}>
               <Text style={styles.bookNowText}>Valider</Text>
             </TouchableOpacity>
           </View>
@@ -871,7 +1039,7 @@ const styles = StyleSheet.create({
   },
   actionButtonsRow: { flexDirection: 'row', justifyContent: 'space-between' },
   bookLaterBtn: {
-    flex: 0.9,
+    flex: 0.95,
     flexDirection: 'row',
     justifyContent: 'center',
     backgroundColor: COLORS.softBlue,
@@ -879,6 +1047,16 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     marginRight: 6,
     alignItems: 'center',
+    borderWidth: 1.5,
+    borderColor: 'transparent',
+  },
+  bookLaterBtnAlert: {
+    backgroundColor: COLORS.secondary,
+    borderColor: COLORS.secondary,
+  },
+  bookLaterBtnValid: {
+    backgroundColor: COLORS.primaryLight,
+    borderColor: COLORS.primary,
   },
   bookLaterText: { color: '#0F172A', fontWeight: '800', fontSize: 12 },
   bookNowBtn: {
@@ -892,16 +1070,22 @@ const styles = StyleSheet.create({
   bookNowText: { color: '#FFFFFF', fontWeight: '800', fontSize: 12 },
   modalBackdrop: { flex: 1, backgroundColor: 'rgba(15, 23, 42, 0.5)', justifyContent: 'flex-end' },
   modalCard: { backgroundColor: '#FFFFFF', borderTopLeftRadius: 24, borderTopRightRadius: 24, padding: 20 },
-  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 16 },
+  modalHeader: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginBottom: 12 },
   modalTitle: { fontSize: 18, fontWeight: '800', color: COLORS.textDark },
   inputLabel: { fontSize: 13, fontWeight: '700', color: COLORS.textDark, marginBottom: 6, marginTop: 8 },
   modalInput: {
-    borderWidth: 1,
+    borderWidth: 1.5,
     borderColor: '#CBD5E1',
     borderRadius: 10,
     paddingHorizontal: 12,
     paddingVertical: 10,
     fontSize: 14,
+  },
+  errorHelper: {
+    color: COLORS.secondary,
+    fontSize: 12,
+    fontWeight: '700',
+    marginTop: 4,
   },
   switchRow: { flexDirection: 'row', justifyContent: 'space-between', alignItems: 'center', marginVertical: 12 },
   paymentRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 18 },
