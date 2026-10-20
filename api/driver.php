@@ -103,7 +103,7 @@ if ($action === 'status') {
         FROM parcel_orders 
         WHERE selected_driver_id = :did 
           AND status = 'DELIVERED' 
-          AND DATE(delivered_at) = CURDATE()
+          AND DATE(delivered_at) = CURDATE() 
     ");
     $stmtDay->execute(['did' => $driver['id']]);
     $earningsDay = (float)$stmtDay->fetchColumn();
