@@ -8,56 +8,339 @@ $input = getJsonInput();
 // -------------------------------------------------------------
 // 1. INSCRIPTION PAR EMAIL & MOT DE PASSE (Sans Téléphone)
 // -------------------------------------------------------------
-if ($action === 'register_email') {
+if ($action === 'register') {
     $fullName = trim($input['full_name'] ?? '');
-    $email    = filter_var(trim($input['email'] ?? ''), FILTER_VALIDATE_EMAIL);
-    $password = trim($input['password'] ?? '');
+    $phone    = trim($input['phone'] ?? '');
+    $email    = strtolower(trim($input['email'] ?? ''));
+    $password = $input['password'] ?? '';
     $role     = in_array($input['role'] ?? '', ['customer', 'driver']) ? $input['role'] : 'customer';
+    $otpCode  = trim($input['otp_code'] ?? '');
 
-    if (!$email || strlen($password) < 6) {
-        jsonResponse(['success' => false, 'error' => 'Email invalide ou mot de passe trop court (min 6 caractères).']);
+    // Vérification du code OTP à 6 chiffres
+    $otpFile = sys_get_temp_dir() . '/livrili_otp_' . md5($email) . '.json';
+    if (file_exists($otpFile)) {
+        $savedOtp = json_decode(file_get_contents($otpFile), true);
+        if (!$savedOtp || $savedOtp['otp'] !== $otpCode || time() > $savedOtp['expires']) {
+            http_response_code(400);
+            echo json_encode(['error' => 'Code OTP à 6 chiffres incorrect ou expiré.']);
+            exit;
+        }
+        @unlink($otpFile);
     }
 
-    $stmtCheck = $pdo->prepare("SELECT id FROM telegram_users WHERE email = :e LIMIT 1");
-    $stmtCheck->execute(['e' => $email]);
-    if ($stmtCheck->fetch()) {
-        jsonResponse(['success' => false, 'error' => 'Cet email est déjà utilisé.']);
+    $chk = $pdo->prepare("SELECT id FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    $chk->execute([$email, $phone]);
+    if ($chk->fetch()) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Cet email ou téléphone est déjà utilisé.']);
+        exit;
     }
 
-    $passwordHash = password_hash($password, PASSWORD_BCRYPT);
+    $hash  = password_hash($password, PASSWORD_BCRYPT);
     $token = bin2hex(random_bytes(32));
 
-    $stmt = $pdo->prepare("
-        INSERT INTO telegram_users (full_name, email, password_hash, role, current_mode, auth_token, status, lang, created_at)
-        VALUES (:name, :email, :pass, :role, :role, :tok, 'active', 'fr', NOW())
+    $lat     = isset($input['latitude']) ? (float)$input['latitude'] : null;
+    $lon     = isset($input['longitude']) ? (float)$input['longitude'] : null;
+    $commune = trim($input['commune_name'] ?? 'El Eulma');
+
+    $ins = $pdo->prepare("
+        INSERT INTO telegram_users 
+        (full_name, phone, email, password_hash, auth_token, role, current_mode, status, latitude, longitude, commune_name, gps_updated_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NOW())
     ");
-    $stmt->execute([
-        'name'  => $fullName ?: 'Utilisateur',
-        'email' => $email,
-        'pass'  => $passwordHash,
-        'role'  => $role,
-        'tok'   => $token
-    ]);
+    $ins->execute([$fullName, $phone, $email, $hash, $token, $role, $role, $lat, $lon, $commune]);
     $userId = (int)$pdo->lastInsertId();
+
+    // Si l'utilisateur s'inscrit comme LIVREUR, créer son profil dans driver_profiles
+    if ($role === 'driver') {
+        $vehicleType = in_array($input['vehicle_type'] ?? '', ['moto', 'camionnette', 'fourgon'])
+            ? $input['vehicle_type']
+            : 'moto';
+        $commune     = trim($input['commune_name'] ?? 'El Eulma');
+        $motoBrand   = trim($input['moto_brand'] ?? 'Moto');
+        $motoColor   = trim($input['moto_color'] ?? 'Standard');
+        $plateNumber = trim($input['plate_number'] ?? '');
+        $photoBase64 = $input['photo_moto'] ?? '';
+
+        $savedPhotoPath = 'uploads/drivers/default.jpg';
+        if (!empty($photoBase64) && strpos($photoBase64, 'base64,') !== false) {
+            $uploadDir = __DIR__ . '/../uploads/drivers/';
+            if (!is_dir($uploadDir)) {
+                @mkdir($uploadDir, 0755, true);
+            }
+            $parts = explode('base64,', $photoBase64);
+            $imgData = base64_decode($parts[1]);
+            $fileName = 'driver_' . $userId . '_' . time() . '.jpg';
+            if (file_put_contents($uploadDir . $fileName, $imgData)) {
+                $savedPhotoPath = 'uploads/drivers/' . $fileName;
+            }
+        }
+
+        $drvIns = $pdo->prepare("
+            INSERT INTO driver_profiles
+            (telegram_user_id, full_name, phone, wilaya_code, commune_name, vehicle_type, moto_brand, moto_color, plate_number, photo_moto, verification_status, is_online)
+            VALUES (?, ?, ?, 19, ?, ?, ?, ?, ?, ?, 'approved', 1)
+        ");
+        $drvIns->execute([
+            $userId,
+            $fullName,
+            $phone,
+            $commune,
+            $vehicleType,
+            $motoBrand,
+            $motoColor,
+            $plateNumber,
+            $savedPhotoPath
+        ]);
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ?");
+    $stmt->execute([$userId]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+    unset($user['password_hash']);
+
+    echo json_encode([
+        'success' => true,
+        'token' => $token,
+        'user' => $user
+    ]);
+    exit;
+}
+
+// -------------------------------------------------------------------------
+// 5. ACTIVATION PROFIL LIVREUR DEPUIS UN COMPTE CLIENT (SettingsScreen)
+// -------------------------------------------------------------------------
+if ($action === 'upgrade_to_driver') {
+    $user = requireAuth($pdo);
+    $commune = trim($input['commune_name'] ?? 'El Eulma');
+    $vType   = trim($input['vehicle_type'] ?? 'moto');
+    $brand   = trim($input['moto_brand'] ?? '');
+    $color   = trim($input['moto_color'] ?? 'Standard');
+    $plate   = trim($input['plate_number'] ?? '');
+    $lat     = (float)($input['latitude'] ?? 36.1528);
+    $lon     = (float)($input['longitude'] ?? 5.6902);
+
+    // Vérifier que le vehicle_type existe dans transport_modes
+    $stmtMode = $pdo->prepare("SELECT id FROM transport_modes WHERE id = :id LIMIT 1");
+    $stmtMode->execute(['id' => $vType]);
+    if (!$stmtMode->fetchColumn()) {
+        $vType = 'moto';
+    }
+
+    $stmtCheck = $pdo->prepare("SELECT id FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
+    $stmtCheck->execute(['uid' => $user['id']]);
+    $existingId = $stmtCheck->fetchColumn();
+
+    if ($existingId) {
+        $pdo->prepare("
+            UPDATE driver_profiles 
+            SET commune_name = :c, vehicle_type = :v, moto_brand = :b, moto_color = :col, plate_number = :p, verification_status = 'approved', is_online = 1
+            WHERE id = :id
+        ")->execute(['c' => $commune, 'v' => $vType, 'b' => $brand, 'col' => $color, 'p' => $plate, 'id' => $existingId]);
+    } else {
+        $pdo->prepare("
+            INSERT INTO driver_profiles (
+                telegram_user_id, full_name, phone, wilaya_code, commune_name,
+                vehicle_type, moto_brand, moto_color, plate_number, photo_moto,
+                verification_status, is_online, rating, created_at
+            ) VALUES (
+                :uid, :name, :phone, 19, :c,
+                :v, :b, :col, :p, '',
+                'approved', 1, 100.00, NOW()
+            )
+        ")->execute([
+            'uid'   => $user['id'],
+            'name'  => $user['full_name'] ?: 'Livreur Livrili',
+            'phone' => $user['phone'] ?: '',
+            'c'     => $commune,
+            'v'     => $vType,
+            'b'     => $brand,
+            'col'   => $color,
+            'p'     => $plate
+        ]);
+    }
+
+    $pdo->prepare("UPDATE telegram_users SET role = 'driver', current_mode = 'driver', commune_name = :c, latitude = :lat, longitude = :lon, gps_updated_at = NOW() WHERE id = :uid")
+        ->execute(['c' => $commune, 'lat' => $lat, 'lon' => $lon, 'uid' => $user['id']]);
 
     jsonResponse([
         'success' => true,
-        'token'   => $token,
         'user'    => [
-            'id'           => $userId,
-            'full_name'    => $fullName,
-            'email'        => $email,
-            'phone'        => null,
-            'role'         => $role,
-            'current_mode' => $role
+            'id'           => (int)$user['id'],
+            'full_name'    => $user['full_name'],
+            'phone'        => $user['phone'],
+            'email'        => $user['email'],
+            'role'         => 'driver',
+            'current_mode' => 'driver',
+            'commune_name' => $commune,
+            'vehicle_type' => $vType
         ]
     ]);
+}
+
+// 1. AJOUTEZ CE BLOC DANS api/auth.php POUR ENVOYER LE CODE OTP À 6 CHIFFRES :
+if ($action === 'send_otp') {
+    $email = trim($input['email'] ?? '');
+    $phone = trim($input['phone'] ?? '');
+
+    if (empty($email) || empty($phone)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Email et téléphone requis']);
+        exit;
+    }
+
+    // Vérifier si l'email ou le téléphone existe déjà
+    $chk = $pdo->prepare("SELECT id FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    $chk->execute([$email, $phone]);
+    if ($chk->fetch()) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Cet email ou numéro de téléphone est déjà utilisé.']);
+        exit;
+    }
+
+    $otp = (string)random_int(100000, 999999);
+
+    // Stocker temporairement l'OTP dans platform_settings ou session fichier
+    $otpFile = sys_get_temp_dir() . '/livrili_otp_' . md5(strtolower($email)) . '.json';
+    file_put_contents($otpFile, json_encode([
+        'otp' => $otp,
+        'expires' => time() + 600
+    ]));
+
+    // Envoi par email (si mail() est configuré sur le serveur)
+    @mail($email, "Votre code de verification Livrili DZ", "Votre code OTP a 6 chiffres est : $otp");
+
+    echo json_encode([
+        'success' => true,
+        'message' => 'Code OTP à 6 chiffres envoyé',
+        'dev_otp' => $otp // Affiché pour faciliter vos tests si le serveur SMTP n'est pas encore actif
+    ]);
+    exit;
+}
+
+// 1. DEMANDE DE RÉINITIALISATION DE MOT DE PASSE (Envoi OTP à 6 chiffres)
+if ($action === 'forgot_password') {
+    $identifier = trim($input['identifier'] ?? '');
+
+    if (empty($identifier)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Veuillez saisir votre email ou votre numéro de téléphone.']);
+        exit;
+    }
+
+    // Chercher l'utilisateur par email ou téléphone dans telegram_users
+    $stmt = $pdo->prepare("SELECT id, full_name, email, phone FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    $stmt->execute([strtolower($identifier), $identifier]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$user) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Aucun compte trouvé avec cet email ou numéro de téléphone.']);
+        exit;
+    }
+
+    // Générer le code OTP à 6 chiffres valable 10 minutes
+    $otp = (string)random_int(100000, 999999);
+    $upd = $pdo->prepare("
+        UPDATE telegram_users 
+        SET otp_code = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) 
+        WHERE id = ?
+    ");
+    $upd->execute([$otp, $user['id']]);
+
+    // Envoyer par email si l'utilisateur a une adresse email
+    $mailSent = false;
+    if (!empty($user['email'])) {
+        $host = $_SERVER['HTTP_HOST'] ?? 'livrili.com';
+        $subject = "Reinitialisation de votre mot de passe Livrili DZ : $otp";
+        $headers  = "MIME-Version: 1.0\r\n";
+        $headers .= "Content-type: text/html; charset=UTF-8\r\n";
+        $headers .= "From: Livrili DZ <no-reply@" . $host . ">\r\n";
+
+        $htmlBody = "
+        <div style='font-family:Arial,sans-serif;padding:20px;border:1px solid #e2e8f0;border-radius:12px;max-width:420px;'>
+            <h2 style='color:#006233;margin-top:0;'>LIVRILI DZ - Mot de passe oublié</h2>
+            <p>Bonjour <b>" . htmlspecialchars($user['full_name'] ?? 'Utilisateur') . "</b>,</p>
+            <p>Voici votre code à 6 chiffres pour réinitialiser votre mot de passe :</p>
+            <div style='background:#E6F2EC;color:#006233;font-size:28px;font-weight:bold;letter-spacing:6px;text-align:center;padding:14px;border-radius:8px;margin:16px 0;'>
+                $otp
+            </div>
+            <p style='color:#64748B;font-size:12px;'>Ce code expire dans 10 minutes.</p>
+        </div>";
+
+        $mailSent = @mail($user['email'], $subject, $htmlBody, $headers);
+    }
+
+    echo json_encode([
+        'success'   => true,
+        'mail_sent' => $mailSent,
+        'dev_otp'   => $otp, // Pour test rapide si l'email met du temps à arriver
+        'message'   => 'Un code de récupération à 6 chiffres a été généré.'
+    ]);
+    exit;
+}
+
+// 2. VALIDATION DU CODE OTP ET CHANGEMENT DU MOT DE PASSE
+if ($action === 'reset_password') {
+    $identifier  = trim($input['identifier'] ?? '');
+    $otpCode     = trim($input['otp_code'] ?? '');
+    $newPassword = $input['new_password'] ?? '';
+
+    if (empty($identifier) || empty($otpCode) || empty($newPassword)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Tous les champs sont obligatoires.']);
+        exit;
+    }
+
+    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    $stmt->execute([strtolower($identifier), $identifier]);
+    $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if (!$user) {
+        http_response_code(404);
+        echo json_encode(['error' => 'Compte introuvable.']);
+        exit;
+    }
+
+    if (empty($user['otp_code']) || (string)$user['otp_code'] !== (string)$otpCode) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Le code à 6 chiffres est incorrect.']);
+        exit;
+    }
+
+    if (!empty($user['otp_expires_at']) && strtotime($user['otp_expires_at']) < time()) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Ce code OTP a expiré. Veuillez en demander un nouveau.']);
+        exit;
+    }
+
+    // Hasher le nouveau mot de passe et effacer le code OTP
+    $hash  = password_hash($newPassword, PASSWORD_BCRYPT);
+    $token = bin2hex(random_bytes(32));
+
+    $upd = $pdo->prepare("
+        UPDATE telegram_users 
+        SET password_hash = ?, otp_code = NULL, otp_expires_at = NULL, auth_token = ? 
+        WHERE id = ?
+    ");
+    $upd->execute([$hash, $token, $user['id']]);
+
+    $user['auth_token'] = $token;
+    unset($user['password_hash'], $user['otp_code']);
+
+    echo json_encode([
+        'success' => true,
+        'token'   => $token,
+        'user'    => $user,
+        'message' => 'Mot de passe modifié avec succès !'
+    ]);
+    exit;
 }
 
 // -------------------------------------------------------------
 // 2. CONNEXION PAR EMAIL & MOT DE PASSE
 // -------------------------------------------------------------
-if ($action === 'login_email') {
+if ($action === 'login') {
     $email    = filter_var(trim($input['email'] ?? ''), FILTER_VALIDATE_EMAIL);
     $password = trim($input['password'] ?? '');
 
@@ -89,52 +372,44 @@ if ($action === 'login_email') {
 // -------------------------------------------------------------
 // 3. AUTHENTIFICATION GOOGLE (SSO)
 // -------------------------------------------------------------
-if ($action === 'login_google') {
-    $googleId = trim($input['google_id'] ?? '');
-    $email    = filter_var(trim($input['email'] ?? ''), FILTER_VALIDATE_EMAIL);
+// Dans api/auth.php, assurez-vous que le bloc google_login accepte l'email direct :
+if ($action === 'google_login') {
+    $email = trim($input['email'] ?? '');
     $fullName = trim($input['full_name'] ?? 'Utilisateur Google');
+    $googleId = trim($input['google_id'] ?? ('g_' . md5($email)));
 
-    if (!$email || !$googleId) {
-        jsonResponse(['success' => false, 'error' => 'Données Google incomplètes.']);
+    if (empty($email)) {
+        http_response_code(400);
+        echo json_encode(['error' => 'Email Google manquant']);
+        exit;
     }
 
-    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE email = :e OR google_id = :gid LIMIT 1");
-    $stmt->execute(['e' => $email, 'gid' => $googleId]);
+    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE email = ? OR google_id = ? LIMIT 1");
+    $stmt->execute([$email, $googleId]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
     $token = bin2hex(random_bytes(32));
 
     if ($user) {
-        $pdo->prepare("UPDATE telegram_users SET google_id = :gid, auth_token = :tok WHERE id = :id")
-            ->execute(['gid' => $googleId, 'tok' => $token, 'id' => $user['id']]);
-        $userId = (int)$user['id'];
-        $role = $user['role'];
-        $currentMode = $user['current_mode'];
-        $phone = $user['phone'];
+        $upd = $pdo->prepare("UPDATE telegram_users SET auth_token = ?, google_id = COALESCE(google_id, ?) WHERE id = ?");
+        $upd->execute([$token, $googleId, $user['id']]);
+        $user['auth_token'] = $token;
     } else {
-        $stmtIns = $pdo->prepare("
-            INSERT INTO telegram_users (full_name, email, google_id, role, current_mode, auth_token, status, lang, created_at)
-            VALUES (:name, :email, :gid, 'customer', 'customer', :tok, 'active', 'fr', NOW())
-        ");
-        $stmtIns->execute(['name' => $fullName, 'email' => $email, 'gid' => $googleId, 'tok' => $token]);
-        $userId = (int)$pdo->lastInsertId();
-        $role = 'customer';
-        $currentMode = 'customer';
-        $phone = null;
+        $ins = $pdo->prepare("INSERT INTO telegram_users (full_name, email, google_id, auth_token, role, current_mode, status) VALUES (?, ?, ?, ?, 'customer', 'customer', 'active')");
+        $ins->execute([$fullName, $email, $googleId, $token]);
+        $newId = $pdo->lastInsertId();
+        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ?");
+        $stmt->execute([$newId]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
     }
 
-    jsonResponse([
+    unset($user['password_hash']);
+    echo json_encode([
         'success' => true,
-        'token'   => $token,
-        'user'    => [
-            'id'           => $userId,
-            'full_name'    => $fullName,
-            'email'        => $email,
-            'phone'        => $phone,
-            'role'         => $role,
-            'current_mode' => $currentMode
-        ]
+        'token' => $token,
+        'user' => $user
     ]);
+    exit;
 }
 
 // -------------------------------------------------------------

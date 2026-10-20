@@ -12,12 +12,16 @@ import {
 import { useFocusEffect } from '@react-navigation/native';
 import { Ionicons } from '@expo/vector-icons';
 import API from '../../api/client';
-import { COLORS } from '../../context/ThemeLanguageContext';
+import { useThemeLang, COLORS } from '../../context/ThemeLanguageContext';
 
 export default function DriverPoolScreen() {
+  const { t, isRTL } = useThemeLang();
   const [orders, setOrders] = useState([]);
   const [driverVType, setDriverVType] = useState('');
   const [refreshing, setRefreshing] = useState(false);
+
+  const rowDir = isRTL ? 'row-reverse' : 'row';
+  const textAlignDir = isRTL ? 'right' : 'left';
 
   const loadPool = async () => {
     try {
@@ -26,7 +30,7 @@ export default function DriverPoolScreen() {
         setOrders(res.data.pool || []);
         if (res.data.driver_vtype) setDriverVType(res.data.driver_vtype);
       } else if (res.data?.error) {
-        Alert.alert('Information Livreur', res.data.error);
+        Alert.alert('Info', res.data.error);
       }
     } catch (e) {
       const msg = e.response?.data?.error || 'Impossible de charger les courses disponibles.';
@@ -52,9 +56,9 @@ export default function DriverPoolScreen() {
     const p2 = p1 + step;
     const p3 = p1 + step * 2;
 
-    Alert.alert('Proposer un tarif', 'Sélectionnez votre offre pour cette course :', [
-      { text: 'Annuler', style: 'cancel' },
-      { text: `${p1} DA (Prix suggéré)`, onPress: () => submitBid(item.id, p1) },
+    Alert.alert(t('proposeRateTitle'), t('proposeRateMsg'), [
+      { text: t('cancel'), style: 'cancel' },
+      { text: `${p1} DA`, onPress: () => submitBid(item.id, p1) },
       { text: `${p2} DA`, onPress: () => submitBid(item.id, p2) },
       { text: `${p3} DA`, onPress: () => submitBid(item.id, p3) },
     ]);
@@ -67,7 +71,7 @@ export default function DriverPoolScreen() {
         amount: amount,
       });
       if (res.data?.success) {
-        Alert.alert('Succès', `Votre offre de ${amount} DA a été transmise au client !`);
+        Alert.alert('OK', `${t('offerSentSuccess')} (${amount} DA)`);
         loadPool();
       } else {
         Alert.alert('Erreur', res.data?.error || "Impossible d'envoyer l'offre.");
@@ -80,10 +84,10 @@ export default function DriverPoolScreen() {
   return (
     <View style={styles.container}>
       {driverVType ? (
-        <View style={styles.filterBanner}>
+        <View style={[styles.filterBanner, { flexDirection: rowDir }]}>
           <Ionicons name="funnel-outline" size={15} color={COLORS.primary} />
           <Text style={styles.filterBannerText}>
-            Courses filtrées pour votre véhicule : {driverVType.toUpperCase()}
+            {t('filterVehicleBanner')} {driverVType.toUpperCase()}
           </Text>
         </View>
       ) : null}
@@ -97,31 +101,35 @@ export default function DriverPoolScreen() {
         ListEmptyComponent={
           <View style={styles.emptyBox}>
             <Ionicons name="navigate-circle-outline" size={48} color={COLORS.textMuted} />
-            <Text style={styles.empty}>
-              Aucune course disponible pour votre type de véhicule dans votre zone actuellement.
-            </Text>
+            <Text style={styles.empty}>{t('emptyPoolMsg')}</Text>
           </View>
         }
         renderItem={({ item }) => (
           <View style={styles.card}>
-            <View style={styles.head}>
+            <View style={[styles.head, { flexDirection: rowDir }]}>
               <Text style={styles.code}>
                 #{item.code} ({item.time})
               </Text>
               {Number(item.is_round_trip) === 1 && (
-                <Text style={styles.roundBadge}>🔄 Aller-Retour</Text>
+                <Text style={styles.roundBadge}>🔄 {t('roundTrip')}</Text>
               )}
             </View>
 
-            <Text style={styles.line}>📍 Départ : {item.pickup_address}</Text>
-            <Text style={styles.line}>🏁 Arrivée : {item.delivery_address}</Text>
-            <Text style={styles.desc}>📦 {item.parcel_description}</Text>
-            <Text style={styles.price}>
-              Prix suggéré : {item.estimated_price} DA (~{item.distance_km} km)
+            <Text style={[styles.line, { textAlign: textAlignDir }]}>
+              📍 {t('pickupLabel')} {item.pickup_address}
+            </Text>
+            <Text style={[styles.line, { textAlign: textAlignDir }]}>
+              🏁 {t('arrivalLabel')} {item.delivery_address}
+            </Text>
+            <Text style={[styles.desc, { textAlign: textAlignDir }]}>
+              📦 {item.parcel_description}
+            </Text>
+            <Text style={[styles.price, { textAlign: textAlignDir }]}>
+              {t('suggestedPrice')} : {item.estimated_price} DA (~{item.distance_km} km)
             </Text>
 
             <TouchableOpacity style={styles.btnBid} onPress={() => handleSendBid(item)}>
-              <Text style={styles.btnBidText}>Faire une offre</Text>
+              <Text style={styles.btnBidText}>{t('makeOfferBtn')}</Text>
             </TouchableOpacity>
           </View>
         )}
@@ -133,7 +141,6 @@ export default function DriverPoolScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background, padding: 12 },
   filterBanner: {
-    flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: COLORS.primaryLight,
     paddingVertical: 8,
@@ -144,7 +151,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.primary,
   },
   filterBannerText: {
-    marginLeft: 6,
+    marginHorizontal: 6,
     fontSize: 12,
     fontWeight: '800',
     color: COLORS.primary,
@@ -160,7 +167,7 @@ const styles = StyleSheet.create({
     borderColor: COLORS.border,
     elevation: 2,
   },
-  head: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 6 },
+  head: { justifyContent: 'space-between', marginBottom: 6 },
   code: { fontWeight: '800', fontSize: 14, color: COLORS.primary },
   roundBadge: {
     backgroundColor: COLORS.primaryLight,

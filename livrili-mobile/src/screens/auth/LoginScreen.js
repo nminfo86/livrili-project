@@ -1,4 +1,5 @@
-import React, { useState, useContext, useEffect } from 'react';
+// src/screens/auth/LoginScreen.js
+import React, { useState, useContext, useEffect } from "react";
 import {
   View,
   Text,
@@ -13,55 +14,90 @@ import {
   Modal,
   Image,
   Linking,
-} from 'react-native';
-import * as Location from 'expo-location';
-import * as ImagePicker from 'expo-image-picker';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
-import { AuthContext } from '../../context/AuthContext';
-import { COLORS } from '../../context/ThemeLanguageContext';
-import apiClient from '../../api/client';
+} from "react-native";
+import * as Location from "expo-location";
+import * as ImagePicker from "expo-image-picker";
+import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { AuthContext } from "../../context/AuthContext";
+import { useThemeLang, COLORS } from "../../context/ThemeLanguageContext";
+import apiClient from "../../api/client";
+
+// 👉 Décommentez la ligne ci-dessous dès que vous avez mis votre image dans assets/login-hero.png :
+const HERO_IMAGE = require('../../../assets/login-hero.png');
+// const HERO_IMAGE = null;
+
+const LANGUAGES = [
+  { code: "fr", label: "Français", short: "Français" },
+  { code: "ar", label: "العربية", short: "العربية" },
+  { code: "dz", label: "الدارجة", short: "الدارجة" },
+];
 
 export default function LoginScreen() {
-  const { login } = useContext(AuthContext);
+  const { login, googleLogin } = useContext(AuthContext);
+  const { t, lang, isRTL, changeLanguage } = useThemeLang();
 
+  const [langDropdownVisible, setLangDropdownVisible] = useState(false);
   const [isRegister, setIsRegister] = useState(false);
-  const [fullName, setFullName] = useState('');
-  const [phone, setPhone] = useState('');
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
-  const [confirmPassword, setConfirmPassword] = useState('');
-  const [role, setRole] = useState('customer');
+  const [fullName, setFullName] = useState("");
+  const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
+  const [password, setPassword] = useState("");
+  const [confirmPassword, setConfirmPassword] = useState("");
+  const [role, setRole] = useState("customer");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [submittedAttempt, setSubmittedAttempt] = useState(false);
 
-  // GPS & Commune automatique
+  // GPS & Commune
   const [gpsLoading, setGpsLoading] = useState(false);
   const [userCoords, setUserCoords] = useState({ lat: 36.1528, lon: 5.6902 });
-  const [communeName, setCommuneName] = useState('Détection GPS...');
+  const [communeName, setCommuneName] = useState("El Eulma");
 
   // Champs spécifiques Livreur
-  const [vehicleType, setVehicleType] = useState('moto');
-  const [vehicleBrand, setVehicleBrand] = useState('');
-  const [vehicleColor, setVehicleColor] = useState('');
-  const [plateNumber, setPlateNumber] = useState('');
+  const [transportModes, setTransportModes] = useState([
+    {
+      id: "moto",
+      title_fr: "Moto",
+      title_ar: "دراجة نارية",
+      icon: "motorbike",
+    },
+    {
+      id: "camionnette",
+      title_fr: "Chana / Harbin",
+      title_ar: "شاحنة صغيرة",
+      icon: "truck-flatbed",
+    },
+    {
+      id: "fourgon",
+      title_fr: "Fourgon",
+      title_ar: "فورغون",
+      icon: "truck-delivery",
+    },
+  ]);
+  const [vehicleType, setVehicleType] = useState("moto");
+  const [vehicleBrand, setVehicleBrand] = useState("");
+  const [vehicleColor, setVehicleColor] = useState("");
+  const [plateNumber, setPlateNumber] = useState("");
   const [proofPhotoUri, setProofPhotoUri] = useState(null);
   const [proofPhotoBase64, setProofPhotoBase64] = useState(null);
 
-  // Modal OTP 2FA Inscription (6 chiffres)
+  // Modal OTP 2FA Inscription
   const [otpModalVisible, setOtpModalVisible] = useState(false);
-  const [otpCode, setOtpCode] = useState('');
-  const [devOtpHint, setDevOtpHint] = useState('');
+  const [otpCode, setOtpCode] = useState("");
+  const [devOtpHint, setDevOtpHint] = useState("");
   const [phoneVerifiedBySim, setPhoneVerifiedBySim] = useState(false);
 
-  // Modal Mot de passe oublié (Forgot Password)
-  const [forgotModalVisible, setForgotModalVisible] = useState(false);
-  const [forgotStep, setForgotStep] = useState(1); // 1: Demander code | 2: Valider code + Nouveau MDP
-  const [forgotIdentifier, setForgotIdentifier] = useState('');
-  const [forgotOtp, setForgotOtp] = useState('');
-  const [forgotDevOtp, setForgotDevOtp] = useState('');
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
-  const [forgotLoading, setForgotLoading] = useState(false);
+  useEffect(() => {
+    apiClient
+      .get("customer.php?action=get_transport_modes")
+      .then((res) => {
+        if (res.data?.transport_modes?.length > 0) {
+          setTransportModes(res.data.transport_modes);
+          setVehicleType(res.data.transport_modes[0].id);
+        }
+      })
+      .catch(() => {});
+  }, []);
 
   useEffect(() => {
     if (isRegister) {
@@ -73,18 +109,17 @@ export default function LoginScreen() {
     setGpsLoading(true);
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        setCommuneName('El Eulma');
+      if (status !== "granted") {
+        setCommuneName("El Eulma");
         return;
       }
-
       let loc = await Location.getCurrentPositionAsync({});
       const { latitude, longitude } = loc.coords;
       setUserCoords({ lat: latitude, lon: longitude });
 
       const res = await fetch(
         `https://nominatim.openstreetmap.org/reverse?format=json&lat=${latitude}&lon=${longitude}&accept-language=fr`,
-        { headers: { 'User-Agent': 'Mozilla/5.0 LivriliAlgeria/1.0' } }
+        { headers: { "User-Agent": "Mozilla/5.0 LivriliAlgeria/1.0" } },
       );
       const data = await res.json();
       const detected =
@@ -92,157 +127,150 @@ export default function LoginScreen() {
         data?.address?.town ||
         data?.address?.village ||
         data?.address?.municipality ||
-        'El Eulma';
-      setCommuneName(detected);
+        "El Eulma";
+      setCommuneName(detected.trim());
     } catch (e) {
-      setCommuneName('El Eulma');
+      setCommuneName("El Eulma");
     } finally {
       setGpsLoading(false);
     }
   };
 
+  // --- VALIDATIONS UNITAIRES ---
+  const isValidFullName = (val) => val.trim().length >= 3;
   const isValidAlgerianPhone = (num) => {
-    const clean = num.replace(/\s+/g, '');
-    if (/^0[567](\d)\1{7}$/.test(clean) || clean === '0512345678' || clean === '0612345678') {
+    const clean = String(num || "").replace(/\s+/g, "");
+    if (
+      /^0[567](\d)\1{7}$/.test(clean) ||
+      clean === "0512345678" ||
+      clean === "0612345678"
+    ) {
       return false;
     }
     return /^(05|06|07)[0-9]{8}$/.test(clean);
   };
-
+  const isValidEmail = (val) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
   const isStrongPassword = (pwd) => {
     const hasLetter = /[a-zA-Z]/.test(pwd);
     const hasNumber = /[0-9]/.test(pwd);
     const hasSpecial = /[^a-zA-Z0-9]/.test(pwd);
     return pwd.length >= 8 && hasLetter && hasNumber && hasSpecial;
   };
+  const isValidConfirmPassword = () =>
+    confirmPassword.length > 0 && password === confirmPassword;
+  const isValidBrand = (val) => val.trim().length >= 2;
+  const isValidPlate = (val) => val.trim().length >= 4;
+  const isValidColor = (val) => val.trim().length >= 2;
+  const isValidPhoto = () => Boolean(proofPhotoBase64);
 
   const pickDriverProofPhoto = async (fromCamera = false) => {
     try {
       const permission = fromCamera
         ? await ImagePicker.requestCameraPermissionsAsync()
         : await ImagePicker.requestMediaLibraryPermissionsAsync();
-
-      if (permission.status !== 'granted') {
-        Alert.alert('Permission requise', 'Veuillez autoriser l’accès à la caméra/galerie.');
-        return;
-      }
+      if (permission.status !== "granted") return;
 
       const result = fromCamera
-        ? await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true, allowsEditing: true })
-        : await ImagePicker.launchImageLibraryAsync({ quality: 0.5, base64: true, allowsEditing: true });
+        ? await ImagePicker.launchCameraAsync({
+            quality: 0.5,
+            base64: true,
+            allowsEditing: true,
+          })
+        : await ImagePicker.launchImageLibraryAsync({
+            quality: 0.5,
+            base64: true,
+            allowsEditing: true,
+          });
 
       if (!result.canceled && result.assets && result.assets[0]) {
         setProofPhotoUri(result.assets[0].uri);
-        setProofPhotoBase64(`data:image/jpeg;base64,${result.assets[0].base64}`);
+        setProofPhotoBase64(
+          `data:image/jpeg;base64,${result.assets[0].base64}`,
+        );
       }
-    } catch (e) {
-      Alert.alert('Erreur photo', 'Impossible de charger la photo.');
-    }
+    } catch (e) {}
   };
 
   const verifySimOwnershipViaWhatsapp = async () => {
     if (!isValidAlgerianPhone(phone)) {
-      Alert.alert(
-        'Numéro invalide',
-        'Veuillez sélectionner le vrai numéro de votre carte SIM (05, 06 ou 07 suivi de 8 chiffres).'
-      );
+      setSubmittedAttempt(true);
       return;
     }
     setPhoneVerifiedBySim(true);
-    const msg = encodeURIComponent(`Vérification de mon numéro Livrili DZ : ${phone.trim()}`);
+    const msg = encodeURIComponent(
+      `Vérification de mon numéro Livrili DZ : ${phone.trim()}`,
+    );
     Linking.openURL(`https://wa.me/213552791323?text=${msg}`).catch(() => {});
   };
 
   const handleSubmit = async () => {
+    setSubmittedAttempt(true);
+
     if (!isRegister) {
-      if ((!email.trim() && !phone.trim()) || !password.trim()) {
-        Alert.alert('Champs requis', 'Veuillez saisir votre email/téléphone et votre mot de passe.');
+      if (!email.trim() || !password.trim()) {
         return;
       }
-
       setLoading(true);
       try {
-        const res = await apiClient.post('auth.php?action=login', {
-          identifier: (email || phone).trim(),
-          email: (email || phone).trim(),
-          phone: (email || phone).trim(),
+        const res = await apiClient.post("auth.php?action=login", {
+          identifier: email.trim(),
+          email: email.trim(),
+          phone: email.trim(),
           password: password,
         });
         const data = res.data;
-
         if (data && (data.token || data.auth_token || data.success)) {
           await login(data.token || data.auth_token, data.user);
         } else {
-          Alert.alert('Erreur', data?.error || data?.message || 'Identifiants incorrects.');
+          Alert.alert(
+            "Erreur",
+            data?.error || data?.message || "Identifiants incorrects.",
+          );
         }
       } catch (err) {
-        const msg = err.response?.data?.error || err.response?.data?.message || 'Erreur de connexion.';
-        Alert.alert('Attention', msg);
+        const msg =
+          err.response?.data?.error ||
+          err.response?.data?.message ||
+          "Erreur de connexion.";
+        Alert.alert("Attention", msg);
       } finally {
         setLoading(false);
       }
       return;
     }
 
-    // --- VALIDATIONS INSCRIPTION ---
-    if (!fullName.trim() || !phone.trim() || !email.trim() || !password) {
-      Alert.alert('Champs requis', 'Veuillez remplir tous les champs obligatoires.');
-      return;
-    }
+    const baseValid =
+      isValidFullName(fullName) &&
+      isValidAlgerianPhone(phone) &&
+      isValidEmail(email) &&
+      isStrongPassword(password) &&
+      isValidConfirmPassword();
 
-    if (!isValidAlgerianPhone(phone.trim())) {
-      Alert.alert(
-        'Numéro de téléphone invalide',
-        'Veuillez utiliser le vrai numéro de votre carte SIM (05, 06 ou 07).'
-      );
-      return;
-    }
+    const driverValid =
+      role !== "driver" ||
+      (isValidBrand(vehicleBrand) &&
+        isValidPlate(plateNumber) &&
+        isValidColor(vehicleColor) &&
+        isValidPhoto());
 
-    if (!isStrongPassword(password)) {
-      Alert.alert(
-        'Mot de passe faible',
-        'Le mot de passe doit contenir au moins 8 caractères avec des lettres, des chiffres et un caractère spécial (@, #, !, $).'
-      );
+    if (!baseValid || !driverValid) {
       return;
-    }
-
-    if (password !== confirmPassword) {
-      Alert.alert('Confirmation incorrecte', 'Les deux mots de passe ne correspondent pas.');
-      return;
-    }
-
-    if (role === 'driver') {
-      if (!vehicleBrand.trim() || !plateNumber.trim()) {
-        Alert.alert(
-          'Informations Livreur manquantes',
-          'Veuillez indiquer la marque du véhicule et le numéro d’immatriculation.'
-        );
-        return;
-      }
-      if (!proofPhotoBase64) {
-        Alert.alert(
-          'Photo preuve obligatoire',
-          'Veuillez ajouter une photo de vous avec votre moyen de transport et matricule visible.'
-        );
-        return;
-      }
     }
 
     setLoading(true);
     try {
-      const otpRes = await apiClient.post('auth.php?action=send_otp', {
+      const otpRes = await apiClient.post("auth.php?action=send_otp", {
         email: email.trim().toLowerCase(),
         phone: phone.trim(),
         full_name: fullName.trim(),
       });
-
       const receivedOtp = otpRes.data?.otp_code || otpRes.data?.dev_otp;
-      setDevOtpHint(receivedOtp ? String(receivedOtp) : '');
-      setOtpCode('');
+      setDevOtpHint(receivedOtp ? String(receivedOtp) : "");
+      setOtpCode("");
       setOtpModalVisible(true);
     } catch (err) {
       const errMsg = err.response?.data?.error || err.response?.data?.message;
-      Alert.alert('Erreur', errMsg || 'Impossible d’envoyer le code OTP.');
+      Alert.alert("Erreur", errMsg || "Impossible d'envoyer le code OTP.");
     } finally {
       setLoading(false);
     }
@@ -250,10 +278,12 @@ export default function LoginScreen() {
 
   const handleVerifyOtpAndRegister = async () => {
     if (otpCode.trim().length !== 6) {
-      Alert.alert('Code invalide', 'Veuillez entrer le code de vérification à 6 chiffres.');
+      Alert.alert(
+        "Code invalide",
+        "Veuillez entrer le code de vérification à 6 chiffres.",
+      );
       return;
     }
-
     setLoading(true);
     try {
       const payload = {
@@ -265,20 +295,18 @@ export default function LoginScreen() {
         otp_code: otpCode.trim(),
         latitude: userCoords.lat,
         longitude: userCoords.lon,
-        commune_name: communeName === 'Détection GPS...' ? 'El Eulma' : communeName,
+        commune_name: communeName || "El Eulma",
         vehicle_type: vehicleType,
         moto_brand: vehicleBrand.trim(),
-        moto_color: vehicleColor.trim() || 'Standard',
+        moto_color: vehicleColor.trim() || "Standard",
         plate_number: plateNumber.trim(),
         photo_moto: proofPhotoBase64,
       };
-
-      const res = await apiClient.post('auth.php?action=register', payload);
+      const res = await apiClient.post("auth.php?action=register", payload);
       const data = res.data;
-
       if (data && (data.token || data.auth_token || data.success)) {
         setOtpModalVisible(false);
-        const token = data.token || data.auth_token || 'session_token';
+        const token = data.token || data.auth_token || "session_token";
         const userObj = data.user || {
           full_name: fullName.trim(),
           phone: phone.trim(),
@@ -286,448 +314,905 @@ export default function LoginScreen() {
           commune_name: payload.commune_name,
           role: role,
           current_mode: role,
-          is_driver: role === 'driver',
+          is_driver: role === "driver",
         };
         await login(token, userObj);
       } else {
-        Alert.alert('Erreur OTP', data?.error || data?.message || 'Code OTP incorrect.');
+        Alert.alert(
+          "Erreur OTP",
+          data?.error || data?.message || "Code OTP incorrect.",
+        );
       }
     } catch (err) {
-      const msg = err.response?.data?.error || err.response?.data?.message || 'Code OTP invalide.';
-      Alert.alert('Erreur', msg);
+      const msg =
+        err.response?.data?.error ||
+        err.response?.data?.message ||
+        "Code OTP invalide.";
+      Alert.alert("Erreur", msg);
     } finally {
       setLoading(false);
     }
   };
 
-  // --- FONCTIONS MOT DE PASSE OUBLIÉ ---
-  const handleRequestPasswordReset = async () => {
-    if (!forgotIdentifier.trim()) {
-      Alert.alert('Champ requis', 'Veuillez entrer votre email ou numéro de téléphone.');
-      return;
-    }
+  const rowDir = isRTL ? "row-reverse" : "row";
+  const textAlignDir = isRTL ? "right" : "left";
+  const currentLangObj = LANGUAGES.find((l) => l.code === lang) || LANGUAGES[0];
 
-    setForgotLoading(true);
-    try {
-      const res = await apiClient.post('auth.php?action=forgot_password', {
-        identifier: forgotIdentifier.trim(),
-      });
-      if (res.data?.success) {
-        setForgotDevOtp(res.data?.dev_otp ? String(res.data.dev_otp) : '');
-        setForgotOtp('');
-        setForgotStep(2);
-      } else {
-        Alert.alert('Erreur', res.data?.error || 'Compte introuvable.');
-      }
-    } catch (err) {
-      Alert.alert(
-        'Erreur',
-        err.response?.data?.error || 'Aucun compte trouvé avec cet identifiant.'
-      );
-    } finally {
-      setForgotLoading(false);
+  const getBoxStyle = (isValid) => {
+    if (isValid) {
+      return [
+        styles.softInputBox,
+        {
+          flexDirection: rowDir,
+          borderColor: COLORS.primary,
+          borderWidth: 1.5,
+        },
+      ];
     }
+    if (submittedAttempt && !isValid) {
+      return [
+        styles.softInputBox,
+        {
+          flexDirection: rowDir,
+          borderColor: COLORS.danger,
+          backgroundColor: COLORS.dangerLight,
+          borderWidth: 1.5,
+        },
+      ];
+    }
+    return [styles.softInputBox, { flexDirection: rowDir }];
   };
 
-  const handleConfirmPasswordReset = async () => {
-    if (forgotOtp.trim().length !== 6) {
-      Alert.alert('Code invalide', 'Veuillez saisir le code OTP à 6 chiffres.');
-      return;
-    }
-    if (!isStrongPassword(newPassword)) {
-      Alert.alert(
-        'Mot de passe faible',
-        'Le nouveau mot de passe doit contenir au moins 8 caractères avec lettres, chiffres et caractère spécial (@, #, !, $).'
-      );
-      return;
-    }
-    if (newPassword !== confirmNewPassword) {
-      Alert.alert('Erreur', 'Les deux mots de passe ne correspondent pas.');
-      return;
-    }
-
-    setForgotLoading(true);
-    try {
-      const res = await apiClient.post('auth.php?action=reset_password', {
-        identifier: forgotIdentifier.trim(),
-        otp_code: forgotOtp.trim(),
-        new_password: newPassword,
-      });
-
-      if (res.data?.success) {
-        setForgotModalVisible(false);
-        setForgotStep(1);
-        Alert.alert('Succès', 'Votre mot de passe a été réinitialisé avec succès !');
-        if (res.data.token && res.data.user) {
-          await login(res.data.token, res.data.user);
-        }
-      } else {
-        Alert.alert('Erreur', res.data?.error || 'Impossible de réinitialiser le mot de passe.');
-      }
-    } catch (err) {
-      Alert.alert('Erreur', err.response?.data?.error || 'Code OTP incorrect ou expiré.');
-    } finally {
-      setForgotLoading(false);
-    }
+  const handleGoogleSignIn = async () => {
+    // Si vous utilisez expo-auth-session / Google Sign-In, passez le payload ici :
+    Alert.alert("Google", "Connexion rapide avec votre compte Google...");
   };
 
   return (
     <KeyboardAvoidingView
       style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+      behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.brandBox}>
-          <View style={styles.logoCircle}>
-            <MaterialCommunityIcons name="motorbike" size={42} color="#FFFFFF" />
-          </View>
-          <Text style={styles.brandTitle}>LIVRILI DZ</Text>
-          <Text style={styles.brandSubtitle}>Livraison rapide partout en Algérie 🇩🇿</Text>
+      <ScrollView
+        contentContainerStyle={styles.scrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        {/* 1. BOUTON DROPDOWN LANGUE EN HAUT À DROITE (Style Maquette) */}
+        <View style={styles.topBar}>
+          <TouchableOpacity
+            style={styles.langDropdownBtn}
+            activeOpacity={0.8}
+            onPress={() => setLangDropdownVisible(true)}
+          >
+            <Text style={styles.langLabelPrefix}>Lang: </Text>
+            <Text style={styles.langLabelValue}>{currentLangObj.short}</Text>
+            <Ionicons
+              name="chevron-down"
+              size={16}
+              color="#0F172A"
+              style={{ marginLeft: 4 }}
+            />
+          </TouchableOpacity>
         </View>
 
-        <View style={styles.card}>
-          <View style={styles.tabSwitch}>
-            <TouchableOpacity
-              style={[styles.tabBtn, !isRegister && styles.tabBtnActive]}
-              onPress={() => setIsRegister(false)}
-            >
-              <Text style={[styles.tabText, !isRegister && styles.tabTextActive]}>Connexion</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.tabBtn, isRegister && styles.tabBtnActive]}
-              onPress={() => setIsRegister(true)}
-            >
-              <Text style={[styles.tabText, isRegister && styles.tabTextActive]}>Inscription</Text>
-            </TouchableOpacity>
-          </View>
+        {/* 2. ILLUSTRATION HERO + TITRE */}
+        <View style={styles.heroContainer}>
+          {HERO_IMAGE ? (
+            <Image
+              source={HERO_IMAGE}
+              style={styles.heroImage}
+              resizeMode="contain"
+            />
+          ) : (
+            <View style={styles.heroFallback}>
+              <MaterialCommunityIcons
+                name="truck-fast-outline"
+                size={96}
+                color={COLORS.primary}
+              />
+            </View>
+          )}
+          {/* <Text style={styles.brandTitle}>LIVRILI DELIVERY</Text> */}
+          {/* <Text style={styles.brandSubtitle}>{t("appSubtitle")}</Text> */}
+        </View>
 
-          {isRegister && (
+        {/* 3. FORMULAIRE */}
+        <View style={styles.formContainer}>
+          {!isRegister ? (
             <>
-              <Text style={styles.label}>Type de compte</Text>
-              <View style={styles.roleRow}>
+              {/* Indicatifs Pays style maquette */}
+              {/* <View
+                style={[
+                  styles.softInputBox,
+                  { flexDirection: rowDir, marginBottom: 14 },
+                ]}
+              >
+                <Text style={[styles.countryText, { textAlign: textAlignDir }]}>
+                  🇩🇿 Algérie (+213)
+                </Text>
+              </View> */}
+
+              {/* Email ou Téléphone */}
+              <View style={getBoxStyle(email.trim().length >= 4)}>
+                <TextInput
+                  style={[styles.softInput, { textAlign: textAlignDir }]}
+                  placeholder={t("emailOrPhoneLabel")}
+                  placeholderTextColor="#64748B"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  value={email}
+                  onChangeText={setEmail}
+                />
+                {email.trim().length >= 4 ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={COLORS.primary}
+                  />
+                ) : submittedAttempt ? (
+                  <Ionicons
+                    name="alert-circle"
+                    size={20}
+                    color={COLORS.danger}
+                  />
+                ) : null}
+              </View>
+              {submittedAttempt && email.trim().length < 4 && (
+                <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                  {t("errIdentifier")}
+                </Text>
+              )}
+
+              {/* Mot de passe */}
+              <View
+                style={[getBoxStyle(password.length >= 4), { marginTop: 14 }]}
+              >
+                <TextInput
+                  style={[styles.softInput, { textAlign: textAlignDir }]}
+                  placeholder={t("passwordLabel")}
+                  placeholderTextColor="#64748B"
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                />
+                {password.length >= 4 && (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={COLORS.primary}
+                    style={{ marginHorizontal: 6 }}
+                  />
+                )}
                 <TouchableOpacity
-                  style={[styles.roleChip, role === 'customer' && styles.roleChipActive]}
-                  onPress={() => setRole('customer')}
+                  onPress={() => setShowPassword(!showPassword)}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-off-outline" : "eye-outline"}
+                    size={20}
+                    color="#64748B"
+                  />
+                </TouchableOpacity>
+              </View>
+              {submittedAttempt && password.length < 4 && (
+                <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                  {t("errLoginPassword")}
+                </Text>
+              )}
+            </>
+          ) : (
+            /* --- FORMULAIRE D'INSCRIPTION COMPLET --- */
+            <>
+              <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                {t("accountType")}
+              </Text>
+              <View style={[styles.roleRow, { flexDirection: rowDir }]}>
+                <TouchableOpacity
+                  style={[
+                    styles.roleChip,
+                    { flexDirection: rowDir },
+                    role === "customer" && styles.roleChipActive,
+                  ]}
+                  onPress={() => setRole("customer")}
                 >
                   <Ionicons
                     name="cube-outline"
                     size={20}
-                    color={role === 'customer' ? COLORS.primary : '#64748B'}
+                    color={role === "customer" ? COLORS.primary : "#64748B"}
                   />
                   <Text
-                    style={[styles.roleChipText, role === 'customer' && styles.roleChipTextActive]}
+                    style={[
+                      styles.roleChipText,
+                      role === "customer" && styles.roleChipTextActive,
+                    ]}
                   >
-                    Client
+                    {t("roleCustomer")}
                   </Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity
-                  style={[styles.roleChip, role === 'driver' && styles.roleChipActive]}
-                  onPress={() => setRole('driver')}
+                  style={[
+                    styles.roleChip,
+                    { flexDirection: rowDir },
+                    role === "driver" && styles.roleChipActive,
+                  ]}
+                  onPress={() => setRole("driver")}
                 >
                   <MaterialCommunityIcons
                     name="motorbike"
                     size={22}
-                    color={role === 'driver' ? COLORS.primary : '#64748B'}
+                    color={role === "driver" ? COLORS.primary : "#64748B"}
                   />
                   <Text
-                    style={[styles.roleChipText, role === 'driver' && styles.roleChipTextActive]}
+                    style={[
+                      styles.roleChipText,
+                      role === "driver" && styles.roleChipTextActive,
+                    ]}
                   >
-                    Livreur
+                    {t("roleDriver")}
                   </Text>
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.label}>Votre Commune (Détectée automatiquement par GPS)</Text>
+              {/* COMMUNE (Sans texte technique) */}
+              <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                {t("communeAutoGps")}
+              </Text>
               <View
                 style={[
-                  styles.inputBox,
-                  { backgroundColor: '#E6F2EC', borderColor: COLORS.primary },
+                  styles.softInputBox,
+                  {
+                    flexDirection: rowDir,
+                    backgroundColor: COLORS.primaryLight,
+                    borderColor: COLORS.primary,
+                    borderWidth: 1.5,
+                  },
                 ]}
               >
                 <Ionicons name="location" size={20} color={COLORS.primary} />
-                <Text style={[styles.input, { fontWeight: '800', color: COLORS.primary }]}>
-                  {communeName}
+                <Text
+                  style={[
+                    styles.softInput,
+                    {
+                      textAlign: textAlignDir,
+                      fontWeight: "800",
+                      color: COLORS.primary,
+                    },
+                  ]}
+                >
+                  {gpsLoading ? t("detectingGps") : communeName}
                 </Text>
                 <TouchableOpacity onPress={detectUserCommuneAutomatic}>
                   {gpsLoading ? (
                     <ActivityIndicator size="small" color={COLORS.primary} />
                   ) : (
-                    <Ionicons name="locate" size={20} color={COLORS.primary} />
+                    <Ionicons
+                      name="checkmark-circle"
+                      size={20}
+                      color={COLORS.primary}
+                    />
                   )}
                 </TouchableOpacity>
               </View>
 
-              <Text style={styles.label}>Nom complet</Text>
-              <View style={styles.inputBox}>
-                <Ionicons name="person-outline" size={20} color="#64748B" />
+              {/* NOM COMPLET */}
+              <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                {t("fullName")}
+              </Text>
+              <View style={getBoxStyle(isValidFullName(fullName))}>
                 <TextInput
-                  style={styles.input}
-                  placeholder="Nom et Prénom"
-                  autoComplete="name"
+                  style={[styles.softInput, { textAlign: textAlignDir }]}
+                  placeholder={t("fullNamePlaceholder")}
+                  placeholderTextColor="#64748B"
                   value={fullName}
                   onChangeText={setFullName}
                 />
+                {isValidFullName(fullName) ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={COLORS.primary}
+                  />
+                ) : submittedAttempt ? (
+                  <Ionicons
+                    name="alert-circle"
+                    size={20}
+                    color={COLORS.danger}
+                  />
+                ) : null}
               </View>
+              {submittedAttempt && !isValidFullName(fullName) && (
+                <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                  {t("errFullName")}
+                </Text>
+              )}
 
-              <Text style={styles.label}>
-                Numéro de téléphone de cet appareil (Suggestion SIM automatique)
+              {/* TÉLÉPHONE ALGÉRIEN */}
+              <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                {t("phoneLabel")}
               </Text>
-              <View style={styles.inputBox}>
-                <Ionicons name="call-outline" size={20} color="#64748B" />
+              <View style={getBoxStyle(isValidAlgerianPhone(phone))}>
                 <TextInput
-                  style={styles.input}
-                  placeholder="Cliquez ici et choisissez votre numéro SIM"
+                  style={[styles.softInput, { textAlign: textAlignDir }]}
+                  placeholder={t("phonePlaceholder")}
+                  placeholderTextColor="#64748B"
                   keyboardType="phone-pad"
-                  autoComplete="tel"
-                  textContentType="telephoneNumber"
-                  importantForAutofill="yes"
                   maxLength={10}
                   value={phone}
-                  onChangeText={(txt) => setPhone(txt.replace(/[^0-9]/g, ''))}
+                  onChangeText={(txt) => setPhone(txt.replace(/[^0-9]/g, ""))}
                 />
-                {isValidAlgerianPhone(phone) && (
-                  <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
-                )}
+                {isValidAlgerianPhone(phone) ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={COLORS.primary}
+                  />
+                ) : submittedAttempt ? (
+                  <Ionicons
+                    name="alert-circle"
+                    size={20}
+                    color={COLORS.danger}
+                  />
+                ) : null}
               </View>
+              {submittedAttempt && !isValidAlgerianPhone(phone) && (
+                <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                  {t("errPhone")}
+                </Text>
+              )}
 
               <TouchableOpacity
-                style={styles.simVerifyBtn}
+                style={[
+                  styles.simVerifyBtn,
+                  {
+                    flexDirection: rowDir,
+                    alignSelf: isRTL ? "flex-end" : "flex-start",
+                  },
+                ]}
                 onPress={verifySimOwnershipViaWhatsapp}
               >
                 <Ionicons
-                  name={phoneVerifiedBySim ? 'checkmark-done-circle' : 'logo-whatsapp'}
+                  name={
+                    phoneVerifiedBySim
+                      ? "checkmark-done-circle"
+                      : "logo-whatsapp"
+                  }
                   size={17}
                   color={COLORS.primary}
                 />
                 <Text style={styles.simVerifyText}>
-                  {phoneVerifiedBySim
-                    ? 'Numéro SIM vérifié'
-                    : 'Vérifier mon numéro via la carte SIM / WhatsApp'}
+                  {phoneVerifiedBySim ? t("simVerified") : t("simVerifyBtn")}
                 </Text>
               </TouchableOpacity>
-            </>
-          )}
 
-          <Text style={styles.label}>{isRegister ? 'Adresse Email' : 'Email ou Téléphone'}</Text>
-          <View style={styles.inputBox}>
-            <Ionicons name="mail-outline" size={20} color="#64748B" />
-            <TextInput
-              style={styles.input}
-              placeholder="exemple@gmail.com ou 0550..."
-              autoCapitalize="none"
-              autoComplete="email"
-              keyboardType="email-address"
-              value={email}
-              onChangeText={setEmail}
-            />
-          </View>
-
-          <Text style={styles.label}>Mot de passe</Text>
-          <View style={styles.inputBox}>
-            <Ionicons name="lock-closed-outline" size={20} color="#64748B" />
-            <TextInput
-              style={styles.input}
-              placeholder="Lettres + chiffres + symbole (@#!)"
-              secureTextEntry={!showPassword}
-              value={password}
-              onChangeText={setPassword}
-            />
-            <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
-              <Ionicons
-                name={showPassword ? 'eye-off-outline' : 'eye-outline'}
-                size={20}
-                color="#64748B"
-              />
-            </TouchableOpacity>
-          </View>
-
-          {/* LIEN MOT DE PASSE OUBLIÉ (EN MODE CONNEXION) */}
-          {!isRegister && (
-            <TouchableOpacity
-              style={styles.forgotLinkBtn}
-              onPress={() => {
-                setForgotIdentifier(email || phone);
-                setForgotStep(1);
-                setForgotModalVisible(true);
-              }}
-            >
-              <Text style={styles.forgotLinkText}>Mot de passe oublié ?</Text>
-            </TouchableOpacity>
-          )}
-
-          {isRegister && (
-            <>
-              <Text style={styles.pwdHint}>
-                Min. 8 caractères avec lettres, chiffres et caractère spécial (@, #, !, $...)
+              {/* EMAIL */}
+              <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                {t("emailLabel")}
               </Text>
-
-              <Text style={styles.label}>Confirmer le mot de passe</Text>
-              <View style={styles.inputBox}>
-                <Ionicons name="shield-checkmark-outline" size={20} color="#64748B" />
+              <View style={getBoxStyle(isValidEmail(email))}>
                 <TextInput
-                  style={styles.input}
-                  placeholder="Retapez votre mot de passe"
+                  style={[styles.softInput, { textAlign: textAlignDir }]}
+                  placeholder={t("emailPlaceholder")}
+                  placeholderTextColor="#64748B"
+                  autoCapitalize="none"
+                  keyboardType="email-address"
+                  value={email}
+                  onChangeText={setEmail}
+                />
+                {isValidEmail(email) ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={COLORS.primary}
+                  />
+                ) : submittedAttempt ? (
+                  <Ionicons
+                    name="alert-circle"
+                    size={20}
+                    color={COLORS.danger}
+                  />
+                ) : null}
+              </View>
+              {submittedAttempt && !isValidEmail(email) && (
+                <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                  {t("errEmail")}
+                </Text>
+              )}
+
+              {/* MOT DE PASSE */}
+              <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                {t("passwordLabel")}
+              </Text>
+              <View style={getBoxStyle(isStrongPassword(password))}>
+                <TextInput
+                  style={[styles.softInput, { textAlign: textAlignDir }]}
+                  placeholder={t("passwordPlaceholder")}
+                  placeholderTextColor="#64748B"
+                  secureTextEntry={!showPassword}
+                  value={password}
+                  onChangeText={setPassword}
+                />
+                {isStrongPassword(password) && (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={COLORS.primary}
+                    style={{ marginHorizontal: 4 }}
+                  />
+                )}
+                <TouchableOpacity
+                  onPress={() => setShowPassword(!showPassword)}
+                >
+                  <Ionicons
+                    name={showPassword ? "eye-off-outline" : "eye-outline"}
+                    size={20}
+                    color="#64748B"
+                  />
+                </TouchableOpacity>
+              </View>
+              {submittedAttempt && !isStrongPassword(password) && (
+                <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                  {t("errPassword")}
+                </Text>
+              )}
+
+              {/* CONFIRMATION MOT DE PASSE */}
+              <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                {t("confirmPasswordLabel")}
+              </Text>
+              <View style={getBoxStyle(isValidConfirmPassword())}>
+                <TextInput
+                  style={[styles.softInput, { textAlign: textAlignDir }]}
+                  placeholder={t("confirmPasswordPlaceholder")}
+                  placeholderTextColor="#64748B"
                   secureTextEntry={!showPassword}
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
                 />
+                {isValidConfirmPassword() ? (
+                  <Ionicons
+                    name="checkmark-circle"
+                    size={20}
+                    color={COLORS.primary}
+                  />
+                ) : submittedAttempt ? (
+                  <Ionicons
+                    name="alert-circle"
+                    size={20}
+                    color={COLORS.danger}
+                  />
+                ) : null}
               </View>
+              {submittedAttempt && !isValidConfirmPassword() && (
+                <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                  {t("errConfirmPassword")}
+                </Text>
+              )}
+
+              {/* SECTION SPÉCIFIQUE LIVREUR */}
+              {role === "driver" && (
+                <View style={styles.driverSection}>
+                  <Text
+                    style={[
+                      styles.driverSectionTitle,
+                      { textAlign: textAlignDir },
+                    ]}
+                  >
+                    {t("driverSectionTitle")}
+                  </Text>
+
+                  <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                    {t("transportModeLabel")}
+                  </Text>
+                  <View
+                    style={[styles.vehicleTypeRow, { flexDirection: rowDir }]}
+                  >
+                    {transportModes.map((v) => {
+                      const vLabel =
+                        isRTL && v.title_ar ? v.title_ar : v.title_fr;
+                      return (
+                        <TouchableOpacity
+                          key={v.id}
+                          style={[
+                            styles.vehicleTypeBtn,
+                            vehicleType === v.id && styles.vehicleTypeBtnActive,
+                          ]}
+                          onPress={() => setVehicleType(v.id)}
+                        >
+                          <MaterialCommunityIcons
+                            name={v.icon || "motorbike"}
+                            size={22}
+                            color={
+                              vehicleType === v.id ? COLORS.primary : "#64748B"
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.vehicleTypeText,
+                              vehicleType === v.id &&
+                                styles.vehicleTypeTextActive,
+                            ]}
+                          >
+                            {vLabel}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+
+                  <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                    {t("vehicleBrandLabel")}
+                  </Text>
+                  <View style={getBoxStyle(isValidBrand(vehicleBrand))}>
+                    <TextInput
+                      style={[styles.softInput, { textAlign: textAlignDir }]}
+                      placeholder={t("vehicleBrandPlaceholder")}
+                      placeholderTextColor="#64748B"
+                      value={vehicleBrand}
+                      onChangeText={setVehicleBrand}
+                    />
+                    {isValidBrand(vehicleBrand) ? (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={20}
+                        color={COLORS.primary}
+                      />
+                    ) : submittedAttempt ? (
+                      <Ionicons
+                        name="alert-circle"
+                        size={20}
+                        color={COLORS.danger}
+                      />
+                    ) : null}
+                  </View>
+                  {submittedAttempt && !isValidBrand(vehicleBrand) && (
+                    <Text
+                      style={[styles.errorText, { textAlign: textAlignDir }]}
+                    >
+                      {t("errBrand")}
+                    </Text>
+                  )}
+
+                  <View
+                    style={{
+                      flexDirection: rowDir,
+                      justifyContent: "space-between",
+                    }}
+                  >
+                    <View style={{ flex: 1, marginHorizontal: 3 }}>
+                      <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                        {t("plateNumberLabel")}
+                      </Text>
+                      <View style={getBoxStyle(isValidPlate(plateNumber))}>
+                        <TextInput
+                          style={[
+                            styles.softInput,
+                            { textAlign: textAlignDir },
+                          ]}
+                          placeholder={t("plateNumberPlaceholder")}
+                          placeholderTextColor="#64748B"
+                          value={plateNumber}
+                          onChangeText={setPlateNumber}
+                        />
+                        {isValidPlate(plateNumber) ? (
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={19}
+                            color={COLORS.primary}
+                          />
+                        ) : submittedAttempt ? (
+                          <Ionicons
+                            name="alert-circle"
+                            size={19}
+                            color={COLORS.danger}
+                          />
+                        ) : null}
+                      </View>
+                      {submittedAttempt && !isValidPlate(plateNumber) && (
+                        <Text
+                          style={[
+                            styles.errorText,
+                            { textAlign: textAlignDir },
+                          ]}
+                        >
+                          {t("errPlate")}
+                        </Text>
+                      )}
+                    </View>
+
+                    <View style={{ flex: 1, marginHorizontal: 3 }}>
+                      <Text style={[styles.label, { textAlign: textAlignDir }]}>
+                        {t("vehicleColorLabel")}
+                      </Text>
+                      <View style={getBoxStyle(isValidColor(vehicleColor))}>
+                        <TextInput
+                          style={[
+                            styles.softInput,
+                            { textAlign: textAlignDir },
+                          ]}
+                          placeholder={t("vehicleColorPlaceholder")}
+                          placeholderTextColor="#64748B"
+                          value={vehicleColor}
+                          onChangeText={setVehicleColor}
+                        />
+                        {isValidColor(vehicleColor) ? (
+                          <Ionicons
+                            name="checkmark-circle"
+                            size={19}
+                            color={COLORS.primary}
+                          />
+                        ) : submittedAttempt ? (
+                          <Ionicons
+                            name="alert-circle"
+                            size={19}
+                            color={COLORS.danger}
+                          />
+                        ) : null}
+                      </View>
+                      {submittedAttempt && !isValidColor(vehicleColor) && (
+                        <Text
+                          style={[
+                            styles.errorText,
+                            { textAlign: textAlignDir },
+                          ]}
+                        >
+                          {t("errColor")}
+                        </Text>
+                      )}
+                    </View>
+                  </View>
+
+                  <View
+                    style={{
+                      flexDirection: rowDir,
+                      alignItems: "center",
+                      justifyContent: "space-between",
+                      marginTop: 10,
+                    }}
+                  >
+                    <Text
+                      style={[
+                        styles.label,
+                        { textAlign: textAlignDir, marginTop: 0 },
+                      ]}
+                    >
+                      {t("proofPhotoLabel")}
+                    </Text>
+                    {isValidPhoto() ? (
+                      <Ionicons
+                        name="checkmark-circle"
+                        size={20}
+                        color={COLORS.primary}
+                      />
+                    ) : submittedAttempt ? (
+                      <Ionicons
+                        name="alert-circle"
+                        size={20}
+                        color={COLORS.danger}
+                      />
+                    ) : null}
+                  </View>
+
+                  <View
+                    style={[styles.photoButtonsRow, { flexDirection: rowDir }]}
+                  >
+                    <TouchableOpacity
+                      style={[
+                        styles.photoBtn,
+                        { flexDirection: rowDir },
+                        submittedAttempt &&
+                          !isValidPhoto() &&
+                          styles.photoBtnError,
+                      ]}
+                      onPress={() => pickDriverProofPhoto(true)}
+                    >
+                      <Ionicons
+                        name="camera-outline"
+                        size={20}
+                        color={
+                          submittedAttempt && !isValidPhoto()
+                            ? COLORS.danger
+                            : COLORS.primary
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.photoBtnText,
+                          submittedAttempt &&
+                            !isValidPhoto() && { color: COLORS.danger },
+                        ]}
+                      >
+                        {t("takePhotoBtn")}
+                      </Text>
+                    </TouchableOpacity>
+
+                    <TouchableOpacity
+                      style={[
+                        styles.photoBtn,
+                        { flexDirection: rowDir },
+                        submittedAttempt &&
+                          !isValidPhoto() &&
+                          styles.photoBtnError,
+                      ]}
+                      onPress={() => pickDriverProofPhoto(false)}
+                    >
+                      <Ionicons
+                        name="images-outline"
+                        size={20}
+                        color={
+                          submittedAttempt && !isValidPhoto()
+                            ? COLORS.danger
+                            : COLORS.primary
+                        }
+                      />
+                      <Text
+                        style={[
+                          styles.photoBtnText,
+                          submittedAttempt &&
+                            !isValidPhoto() && { color: COLORS.danger },
+                        ]}
+                      >
+                        {t("galleryBtn")}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  {submittedAttempt && !isValidPhoto() && (
+                    <Text
+                      style={[styles.errorText, { textAlign: textAlignDir }]}
+                    >
+                      {t("errPhoto")}
+                    </Text>
+                  )}
+
+                  {proofPhotoUri && (
+                    <View style={styles.previewBox}>
+                      <Image
+                        source={{ uri: proofPhotoUri }}
+                        style={styles.previewImage}
+                      />
+                      <Text style={styles.previewSuccess}>
+                        {t("photoAddedSuccess")}
+                      </Text>
+                    </View>
+                  )}
+                </View>
+              )}
             </>
           )}
 
-          {isRegister && role === 'driver' && (
-            <View style={styles.driverSection}>
-              <Text style={styles.driverSectionTitle}>
-                Informations du Véhicule & Preuve Livreur
-              </Text>
-
-              <Text style={styles.label}>Moyen de transport</Text>
-              <View style={styles.vehicleTypeRow}>
-                {[
-                  { id: 'moto', label: 'Moto', icon: 'motorbike' },
-                  { id: 'camionnette', label: 'Chana / Harbin', icon: 'truck-flatbed' },
-                  { id: 'fourgon', label: 'Fourgon', icon: 'truck-delivery' },
-                ].map((v) => (
-                  <TouchableOpacity
-                    key={v.id}
-                    style={[
-                      styles.vehicleTypeBtn,
-                      vehicleType === v.id && styles.vehicleTypeBtnActive,
-                    ]}
-                    onPress={() => setVehicleType(v.id)}
-                  >
-                    <MaterialCommunityIcons
-                      name={v.icon}
-                      size={22}
-                      color={vehicleType === v.id ? COLORS.primary : '#64748B'}
-                    />
-                    <Text
-                      style={[
-                        styles.vehicleTypeText,
-                        vehicleType === v.id && styles.vehicleTypeTextActive,
-                      ]}
-                    >
-                      {v.label}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-
-              <Text style={styles.label}>Marque / Modèle du véhicule</Text>
-              <View style={styles.inputBox}>
-                <MaterialCommunityIcons name="motorbike" size={20} color="#64748B" />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Ex: SYM 300, VMS, Chana, Harbin, Master..."
-                  value={vehicleBrand}
-                  onChangeText={setVehicleBrand}
-                />
-              </View>
-
-              <View style={{ flexDirection: 'row', justifyContent: 'space-between' }}>
-                <View style={{ flex: 1, marginRight: 6 }}>
-                  <Text style={styles.label}>Matricule</Text>
-                  <View style={styles.inputBox}>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Ex: 01234-119-19"
-                      value={plateNumber}
-                      onChangeText={setPlateNumber}
-                    />
-                  </View>
-                </View>
-
-                <View style={{ flex: 1, marginLeft: 6 }}>
-                  <Text style={styles.label}>Couleur</Text>
-                  <View style={styles.inputBox}>
-                    <TextInput
-                      style={styles.input}
-                      placeholder="Ex: Noir, Blanc..."
-                      value={vehicleColor}
-                      onChangeText={setVehicleColor}
-                    />
-                  </View>
-                </View>
-              </View>
-
-              <Text style={styles.label}>
-                Photo preuve (Vous + Véhicule avec Matricule visible)
-              </Text>
-              <View style={styles.photoButtonsRow}>
-                <TouchableOpacity
-                  style={styles.photoBtn}
-                  onPress={() => pickDriverProofPhoto(true)}
-                >
-                  <Ionicons name="camera-outline" size={20} color={COLORS.primary} />
-                  <Text style={styles.photoBtnText}>Prendre Photo</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.photoBtn}
-                  onPress={() => pickDriverProofPhoto(false)}
-                >
-                  <Ionicons name="images-outline" size={20} color={COLORS.primary} />
-                  <Text style={styles.photoBtnText}>Galerie</Text>
-                </TouchableOpacity>
-              </View>
-
-              {proofPhotoUri && (
-                <View style={styles.previewBox}>
-                  <Image source={{ uri: proofPhotoUri }} style={styles.previewImage} />
-                  <Text style={styles.previewSuccess}>✓ Photo preuve ajoutée</Text>
-                </View>
-              )}
-            </View>
-          )}
-
-          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={loading}>
+          {/* BOUTON PRINCIPAL */}
+          <TouchableOpacity
+            style={styles.submitBtn}
+            onPress={handleSubmit}
+            disabled={loading}
+          >
             {loading ? (
               <ActivityIndicator color="#FFF" />
             ) : (
               <Text style={styles.submitBtnText}>
-                {isRegister ? 'RECEVOIR LE CODE OTP (2FA)' : 'SE CONNECTER'}
+                {isRegister ? t("submitRegisterBtn") : t("submitLoginBtn")}
               </Text>
             )}
           </TouchableOpacity>
+
+          {/* SÉPARATEUR "OU SE CONNECTER AVEC" + LOGO GOOGLE CENTRÉ UNIQUEMENT */}
+          <View style={styles.orDividerRow}>
+            <View style={styles.orLine} />
+            <Text style={styles.orText}>{t("orConnectWith")}</Text>
+            <View style={styles.orLine} />
+          </View>
+
+          <View style={styles.socialCenterRow}>
+            <TouchableOpacity
+              style={styles.googleCircleBtn}
+              activeOpacity={0.8}
+              onPress={handleGoogleSignIn}
+            >
+              <Image
+                source={require('../../../assets/g-logo.png')}
+                style={styles.googleLogoImg}
+                resizeMode="contain"
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* LIENS EN BAS (Register User? | Privacy Policy) */}
+          <View style={[styles.bottomLinksRow, { flexDirection: rowDir }]}>
+            <TouchableOpacity
+              onPress={() => {
+                setIsRegister(!isRegister);
+                setSubmittedAttempt(false);
+              }}
+            >
+              <Text style={styles.bottomLinkText}>
+                {isRegister ? t("loginTab") : `${t("registerTab")} ?`}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              onPress={() =>
+                Linking.openURL("https://livrili.bouhezila.com").catch(() => {})
+              }
+            >
+              <Text style={styles.bottomLinkText}>{t("privacyPolicy")}</Text>
+            </TouchableOpacity>
+          </View>
         </View>
       </ScrollView>
+
+      {/* MODAL DROPDOWN SÉLECTEUR DE LANGUE */}
+      <Modal visible={langDropdownVisible} transparent animationType="fade">
+        <TouchableOpacity
+          style={styles.dropdownOverlay}
+          activeOpacity={1}
+          onPress={() => setLangDropdownVisible(false)}
+        >
+          <View style={styles.dropdownMenu}>
+            {LANGUAGES.map((item) => {
+              const selected = lang === item.code;
+              return (
+                <TouchableOpacity
+                  key={item.code}
+                  style={[
+                    styles.dropdownItem,
+                    selected && styles.dropdownItemActive,
+                  ]}
+                  onPress={() => {
+                    changeLanguage(item.code);
+                    setLangDropdownVisible(false);
+                  }}
+                >
+                  <Text
+                    style={[
+                      styles.dropdownItemText,
+                      selected && styles.dropdownItemTextActive,
+                    ]}
+                  >
+                    {item.label}
+                  </Text>
+                  {selected && (
+                    <Ionicons
+                      name="checkmark"
+                      size={18}
+                      color={COLORS.primary}
+                    />
+                  )}
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        </TouchableOpacity>
+      </Modal>
 
       {/* MODAL OTP INSCRIPTION */}
       <Modal visible={otpModalVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vérification 2FA (6 chiffres)</Text>
+            <View style={[styles.modalHeader, { flexDirection: rowDir }]}>
+              <Text style={styles.modalTitle}>
+                Vérification 2FA (6 chiffres)
+              </Text>
               <TouchableOpacity onPress={() => setOtpModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#0F172A" />
               </TouchableOpacity>
             </View>
-
-            <Text style={styles.otpSubtitle}>
-              Code de sécurité généré pour {phone} / {email}.
+            <Text style={[styles.otpSubtitle, { textAlign: textAlignDir }]}>
+              {phone} / {email}
             </Text>
-
             {devOtpHint ? (
               <TouchableOpacity
                 style={styles.devOtpBanner}
                 onPress={() => setOtpCode(devOtpHint)}
               >
-                <Text style={styles.devOtpText}>
-                  Votre code OTP : {devOtpHint} (Appuyez ici pour remplir)
-                </Text>
+                <Text style={styles.devOtpText}>OTP : {devOtpHint}</Text>
               </TouchableOpacity>
             ) : null}
-
             <TextInput
               style={styles.otpInput}
-              placeholder="• • • • • •"
+              placeholder="••••••"
               keyboardType="number-pad"
               maxLength={6}
               value={otpCode}
               onChangeText={setOtpCode}
             />
-
             <TouchableOpacity
               style={[styles.submitBtn, { marginTop: 16 }]}
               onPress={handleVerifyOtpAndRegister}
@@ -736,116 +1221,9 @@ export default function LoginScreen() {
               {loading ? (
                 <ActivityIndicator color="#FFF" />
               ) : (
-                <Text style={styles.submitBtnText}>VALIDER LE CODE & CONFIRMER</Text>
+                <Text style={styles.submitBtnText}>{t("validateBtn")}</Text>
               )}
             </TouchableOpacity>
-          </View>
-        </View>
-      </Modal>
-
-      {/* MODAL MOT DE PASSE OUBLIÉ (2 ÉTAPES AVEC OTP 6 CHIFFRES) */}
-      <Modal visible={forgotModalVisible} transparent animationType="slide">
-        <View style={styles.modalBackdrop}>
-          <View style={styles.modalCard}>
-            <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Mot de passe oublié</Text>
-              <TouchableOpacity onPress={() => setForgotModalVisible(false)}>
-                <Ionicons name="close" size={24} color="#0F172A" />
-              </TouchableOpacity>
-            </View>
-
-            {forgotStep === 1 ? (
-              <>
-                <Text style={styles.otpSubtitle}>
-                  Entrez votre adresse email ou votre numéro de téléphone pour recevoir un code de récupération à 6 chiffres.
-                </Text>
-
-                <View style={styles.inputBox}>
-                  <Ionicons name="mail-outline" size={20} color="#64748B" />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Votre Email ou Téléphone (0550...)"
-                    autoCapitalize="none"
-                    value={forgotIdentifier}
-                    onChangeText={setForgotIdentifier}
-                  />
-                </View>
-
-                <TouchableOpacity
-                  style={styles.submitBtn}
-                  onPress={handleRequestPasswordReset}
-                  disabled={forgotLoading}
-                >
-                  {forgotLoading ? (
-                    <ActivityIndicator color="#FFF" />
-                  ) : (
-                    <Text style={styles.submitBtnText}>ENVOYER LE CODE À 6 CHIFFRES</Text>
-                  )}
-                </TouchableOpacity>
-              </>
-            ) : (
-              <>
-                <Text style={styles.otpSubtitle}>
-                  Entrez le code à 6 chiffres reçu et choisissez votre nouveau mot de passe.
-                </Text>
-
-                {forgotDevOtp ? (
-                  <TouchableOpacity
-                    style={styles.devOtpBanner}
-                    onPress={() => setForgotOtp(forgotDevOtp)}
-                  >
-                    <Text style={styles.devOtpText}>
-                      Code OTP : {forgotDevOtp} (Appuyez pour remplir)
-                    </Text>
-                  </TouchableOpacity>
-                ) : null}
-
-                <TextInput
-                  style={styles.otpInput}
-                  placeholder="• • • • • •"
-                  keyboardType="number-pad"
-                  maxLength={6}
-                  value={forgotOtp}
-                  onChangeText={setForgotOtp}
-                />
-
-                <Text style={styles.label}>Nouveau mot de passe</Text>
-                <View style={styles.inputBox}>
-                  <Ionicons name="lock-closed-outline" size={20} color="#64748B" />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Lettres + chiffres + symbole (@#!)"
-                    secureTextEntry={!showPassword}
-                    value={newPassword}
-                    onChangeText={setNewPassword}
-                  />
-                </View>
-
-                <Text style={styles.label}>Confirmer le nouveau mot de passe</Text>
-                <View style={styles.inputBox}>
-                  <Ionicons name="shield-checkmark-outline" size={20} color="#64748B" />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="Retapez le nouveau mot de passe"
-                    secureTextEntry={!showPassword}
-                    value={confirmNewPassword}
-                    onChangeText={setConfirmNewPassword}
-                  />
-                </View>
-
-                <TouchableOpacity
-                  style={styles.submitBtn}
-                  onPress={handleConfirmPasswordReset}
-                  disabled={forgotLoading}
-                >
-                  {forgotLoading ? (
-                    <ActivityIndicator color="#FFF" />
-                  ) : (
-                    <Text style={styles.submitBtnText}>CHANGER MON MOT DE PASSE</Text>
-                  )}
-                </TouchableOpacity>
-              </>
-            )}
           </View>
         </View>
       </Modal>
@@ -854,161 +1232,352 @@ export default function LoginScreen() {
 }
 
 const styles = StyleSheet.create({
-  container: { flex: 1, backgroundColor: '#F8FAFC' },
-  scrollContent: { flexGrow: 1, justifyContent: 'center', padding: 18 },
-  brandBox: { alignItems: 'center', marginBottom: 16, marginTop: 14 },
-  logoCircle: {
-    width: 68,
-    height: 68,
-    borderRadius: 34,
-    backgroundColor: COLORS.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginBottom: 8,
-    elevation: 6,
+  container: { flex: 1, backgroundColor: "#FFFFFF" },
+  scrollContent: {
+    flexGrow: 1,
+    paddingHorizontal: 22,
+    paddingTop: 42,
+    paddingBottom: 30,
   },
-  brandTitle: { fontSize: 23, fontWeight: '900', color: '#0F172A', letterSpacing: 1 },
-  brandSubtitle: { fontSize: 12, color: '#64748B', marginTop: 2 },
-  card: { backgroundColor: '#FFFFFF', borderRadius: 20, padding: 18, elevation: 4 },
-  tabSwitch: {
-    flexDirection: 'row',
-    backgroundColor: '#F1F5F9',
-    borderRadius: 12,
-    padding: 4,
+  topBar: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    marginBottom: 8,
+  },
+  langDropdownBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "#FFFFFF",
+    borderWidth: 1.2,
+    borderColor: "#CBD5E1",
+    borderRadius: 22,
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    elevation: 2,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 3,
+  },
+  langLabelPrefix: { fontSize: 13, color: "#475569", fontWeight: "500" },
+  langLabelValue: { fontSize: 13, color: "#0F172A", fontWeight: "800" },
+  heroContainer: {
+    alignItems: "center",
+    marginVertical: 14,
+  },
+  heroImage: {
+    width: 260,
+    height: 220,
+    marginBottom: 8,
+  },
+  heroFallback: {
+    width: 150,
+    height: 130,
+    borderRadius: 24,
+    backgroundColor: COLORS.primaryLight,
+    alignItems: "center",
+    justifyContent: "center",
     marginBottom: 12,
   },
-  tabBtn: { flex: 1, paddingVertical: 10, borderRadius: 10, alignItems: 'center' },
-  tabBtnActive: { backgroundColor: '#FFFFFF', elevation: 2 },
-  tabText: { fontSize: 14, fontWeight: '700', color: '#64748B' },
-  tabTextActive: { color: COLORS.primary },
-  label: { fontSize: 12, fontWeight: '700', color: '#334155', marginBottom: 5, marginTop: 10 },
-  pwdHint: { fontSize: 11, color: '#64748B', marginTop: 4 },
-  forgotLinkBtn: { alignSelf: 'flex-end', marginTop: 8, paddingVertical: 2 },
-  forgotLinkText: { color: COLORS.primary, fontSize: 13, fontWeight: '700' },
-  inputBox: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    paddingHorizontal: 12,
-    height: 46,
-    backgroundColor: '#F8FAFC',
+  brandTitle: {
+    fontSize: 25,
+    fontWeight: "800",
+    color: COLORS.primary,
+    letterSpacing: 1.2,
+    textAlign: "center",
   },
-  input: { flex: 1, marginLeft: 8, fontSize: 14, color: '#0F172A' },
+  brandSubtitle: {
+    fontSize: 12,
+    color: "#64748B",
+    marginTop: 4,
+    textAlign: "center",
+  },
+  formContainer: {
+    marginTop: 12,
+  },
+  softInputBox: {
+    alignItems: "center",
+    backgroundColor: "#F1F5F9",
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    height: 52,
+  },
+  softInput: {
+    flex: 1,
+    fontSize: 15,
+    color: "#0F172A",
+    fontWeight: "500",
+  },
+  countryText: {
+    flex: 1,
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#0F172A",
+  },
+  label: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "#334155",
+    marginBottom: 5,
+    marginTop: 12,
+  },
+  errorText: {
+    color: COLORS.danger,
+    fontSize: 11,
+    fontWeight: "700",
+    marginTop: 4,
+  },
   simVerifyBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: "center",
     marginTop: 6,
     paddingVertical: 6,
     paddingHorizontal: 10,
     backgroundColor: COLORS.primaryLight,
     borderRadius: 8,
-    alignSelf: 'flex-start',
   },
-  simVerifyText: { marginLeft: 6, fontSize: 11, fontWeight: '700', color: COLORS.primary },
-  roleRow: { flexDirection: 'row', justifyContent: 'space-between', marginBottom: 4 },
+  simVerifyText: {
+    marginHorizontal: 6,
+    fontSize: 11,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+  roleRow: { justifyContent: "space-between", marginBottom: 4 },
   roleChip: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 11,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: 12,
     borderWidth: 1.5,
-    borderColor: '#E2E8F0',
+    borderColor: "#E2E8F0",
     borderRadius: 12,
     marginHorizontal: 4,
+    backgroundColor: "#F8FAFC",
   },
-  roleChipActive: { borderColor: COLORS.primary, backgroundColor: COLORS.primaryLight },
-  roleChipText: { marginLeft: 6, fontSize: 14, fontWeight: '800', color: '#64748B' },
+  roleChipActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primaryLight,
+  },
+  roleChipText: {
+    marginHorizontal: 6,
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#64748B",
+  },
   roleChipTextActive: { color: COLORS.primary },
   driverSection: {
     marginTop: 14,
     padding: 12,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: "#F8FAFC",
     borderRadius: 14,
     borderWidth: 1,
-    borderColor: '#CBD5E1',
+    borderColor: "#CBD5E1",
   },
-  driverSectionTitle: { fontSize: 13, fontWeight: '800', color: COLORS.primary, marginBottom: 6 },
-  vehicleTypeRow: { flexDirection: 'row', justifyContent: 'space-between' },
+  driverSectionTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: COLORS.primary,
+    marginBottom: 6,
+  },
+  vehicleTypeRow: { justifyContent: "space-between" },
   vehicleTypeBtn: {
     flex: 1,
-    alignItems: 'center',
+    alignItems: "center",
     paddingVertical: 8,
     marginHorizontal: 3,
-    backgroundColor: '#FFF',
+    backgroundColor: "#FFF",
     borderRadius: 10,
     borderWidth: 1.5,
-    borderColor: '#E2E8F0',
+    borderColor: "#E2E8F0",
   },
-  vehicleTypeBtnActive: { borderColor: COLORS.primary, backgroundColor: COLORS.primaryLight },
-  vehicleTypeText: { fontSize: 11, fontWeight: '700', color: '#64748B', marginTop: 2 },
+  vehicleTypeBtnActive: {
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primaryLight,
+  },
+  vehicleTypeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#64748B",
+    marginTop: 2,
+  },
   vehicleTypeTextActive: { color: COLORS.primary },
-  photoButtonsRow: { flexDirection: 'row', justifyContent: 'space-between', marginTop: 4 },
+  photoButtonsRow: { justifyContent: "space-between", marginTop: 6 },
   photoBtn: {
     flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#FFFFFF',
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#FFFFFF",
     borderWidth: 1.5,
     borderColor: COLORS.primary,
-    paddingVertical: 10,
+    paddingVertical: 11,
     borderRadius: 10,
     marginHorizontal: 4,
   },
-  photoBtnText: { marginLeft: 6, fontSize: 12, fontWeight: '700', color: COLORS.primary },
-  previewBox: { alignItems: 'center', marginTop: 10 },
-  previewImage: { width: '100%', height: 130, borderRadius: 10 },
-  previewSuccess: { marginTop: 4, fontSize: 12, fontWeight: '700', color: COLORS.primary },
+  photoBtnError: {
+    borderColor: COLORS.danger,
+    backgroundColor: COLORS.dangerLight,
+  },
+  photoBtnText: {
+    marginHorizontal: 6,
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
+  previewBox: { alignItems: "center", marginTop: 10 },
+  previewImage: { width: "100%", height: 130, borderRadius: 10 },
+  previewSuccess: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "700",
+    color: COLORS.primary,
+  },
   submitBtn: {
     backgroundColor: COLORS.primary,
-    paddingVertical: 14,
+    paddingVertical: 15,
     borderRadius: 12,
-    alignItems: 'center',
-    marginTop: 18,
+    alignItems: "center",
+    marginTop: 20,
+    elevation: 2,
   },
-  submitBtnText: { color: '#FFFFFF', fontWeight: '800', fontSize: 13, letterSpacing: 0.5 },
+  submitBtnText: {
+    color: "#FFFFFF",
+    fontWeight: "800",
+    fontSize: 15,
+    letterSpacing: 0.4,
+  },
+  bottomLinksRow: {
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginTop: 26,
+    paddingHorizontal: 6,
+  },
+  bottomLinkText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#334155",
+  },
+  dropdownOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.25)",
+    alignItems: "flex-end",
+    paddingTop: 82,
+    paddingRight: 22,
+  },
+  dropdownMenu: {
+    width: 165,
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    paddingVertical: 6,
+    elevation: 8,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.18,
+    shadowRadius: 8,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+  },
+  dropdownItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: 11,
+    paddingHorizontal: 14,
+  },
+  dropdownItemActive: {
+    backgroundColor: COLORS.primaryLight,
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "#1E293B",
+  },
+  dropdownItemTextActive: {
+    fontWeight: "800",
+    color: COLORS.primary,
+  },
   modalBackdrop: {
     flex: 1,
-    backgroundColor: 'rgba(15, 23, 42, 0.55)',
-    justifyContent: 'flex-end',
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "flex-end",
   },
   modalCard: {
-    backgroundColor: '#FFFFFF',
+    backgroundColor: "#FFFFFF",
     borderTopLeftRadius: 24,
     borderTopRightRadius: 24,
     padding: 22,
   },
   modalHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+    justifyContent: "space-between",
+    alignItems: "center",
     marginBottom: 10,
   },
-  modalTitle: { fontSize: 18, fontWeight: '800', color: '#0F172A' },
-  otpSubtitle: { fontSize: 13, color: '#64748B', marginBottom: 12 },
+  modalTitle: { fontSize: 18, fontWeight: "800", color: "#0F172A" },
+  otpSubtitle: { fontSize: 13, color: "#64748B", marginBottom: 12 },
   devOtpBanner: {
     backgroundColor: COLORS.primaryLight,
     padding: 12,
     borderRadius: 10,
     marginBottom: 12,
-    alignItems: 'center',
+    alignItems: "center",
     borderWidth: 1,
     borderColor: COLORS.primary,
   },
-  devOtpText: { color: COLORS.primary, fontWeight: '800', fontSize: 14 },
+  devOtpText: { color: COLORS.primary, fontWeight: "800", fontSize: 14 },
   otpInput: {
     borderWidth: 2,
     borderColor: COLORS.primary,
     borderRadius: 12,
     height: 54,
-    textAlign: 'center',
+    textAlign: "center",
     fontSize: 24,
-    fontWeight: '800',
+    fontWeight: "800",
     letterSpacing: 10,
-    color: '#0F172A',
-    backgroundColor: '#F8FAFC',
+    color: "#0F172A",
+    backgroundColor: "#F8FAFC",
+  },
+  orDividerRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 22,
+    marginBottom: 16,
+    paddingHorizontal: 20,
+  },
+  orLine: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#94A3B8',
+    maxWidth: 65,
+  },
+  orText: {
+    marginHorizontal: 12,
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#334155',
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  socialCenterRow: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 6,
+  },
+  googleCircleBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.12,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  googleLogoImg: {
+    width: 30,
+    height: 30,
   },
 });

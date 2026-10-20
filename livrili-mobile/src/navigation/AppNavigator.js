@@ -110,12 +110,12 @@ function DriverTabs() {
       <Tab.Screen
         name="DriverDashboard"
         component={DriverDashboardScreen}
-        options={{ title: 'Tableau de bord' }}
+        options={{ title: t('driverDashboardTab') }}
       />
       <Tab.Screen
         name="DriverPool"
         component={DriverPoolScreen}
-        options={{ title: 'Courses disponibles' }}
+        options={{ title: t('availablePoolTitle') }}
       />
       <Tab.Screen
         name="DriverSettings"
