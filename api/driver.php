@@ -97,16 +97,38 @@ if ($action === 'status') {
     $stmtDeliv->execute(['did' => $driver['id']]);
     $deliveredCount = (int)$stmtDeliv->fetchColumn();
 
+    // Calcul des gains du jour (courses livrées aujourd'hui)
+    $stmtDay = $pdo->prepare("
+        SELECT SUM(IF(agreed_fee > 0, agreed_fee, estimated_price)) 
+        FROM parcel_orders 
+        WHERE selected_driver_id = :did 
+          AND status = 'DELIVERED' 
+          AND DATE(delivered_at) = CURDATE()
+    ");
+    $stmtDay->execute(['did' => $driver['id']]);
+    $earningsDay = (float)$stmtDay->fetchColumn();
+
+    // Calcul des gains du mois en cours
+    $stmtMonth = $pdo->prepare("
+        SELECT SUM(IF(agreed_fee > 0, agreed_fee, estimated_price)) 
+        FROM parcel_orders 
+        WHERE selected_driver_id = :did 
+          AND status = 'DELIVERED' 
+          AND MONTH(delivered_at) = MONTH(NOW()) 
+          AND YEAR(delivered_at) = YEAR(NOW())
+    ");
+    $stmtMonth->execute(['did' => $driver['id']]);
+    $earningsMonth = (float)$stmtMonth->fetchColumn();
+
     jsonResponse([
-        'success'             => true,
-        'is_online'           => (int)$driver['is_online'],
-        'rating'              => (float)$driver['rating'],
-        'verification_status' => $driver['verification_status'],
-        'vehicle_type'        => $driver['vehicle_type'],
-        'delivered_count'     => $deliveredCount
+        'success'         => true,
+        'is_online'       => (int)$driver['is_online'],
+        'rating'          => (float)$driver['rating'],
+        'delivered_count' => $deliveredCount,
+        'earnings_day'    => $earningsDay,
+        'earnings_month'  => $earningsMonth
     ]);
 }
-
 if ($action === 'toggle_online') {
     $isOnline = !empty($input['is_online']) ? 1 : 0;
     $pdo->prepare("UPDATE driver_profiles SET is_online = :on WHERE id = :did")
@@ -177,6 +199,31 @@ if ($action === 'pool') {
         'success'      => true,
         'driver_vtype' => $driver['vehicle_type'],
         'pool'         => $stmt->fetchAll(PDO::FETCH_ASSOC)
+    ]);
+}
+
+// -------------------------------------------------------------------------
+// 3b. HISTORIQUE DES OFFRES (BIDS) DU CHAUFFEUR ET COURSES ATTRIBUÉES
+// -------------------------------------------------------------------------
+if ($action === 'driver_bids') {
+    $sql = "SELECT pb.id AS bid_id, pb.bid_amount, pb.status AS bid_status, pb.created_at AS bid_date,
+                   po.id AS order_id, po.code, po.pickup_address, po.delivery_address, 
+                   po.recipient_phone, po.payment_by, po.is_round_trip, po.status AS order_status,
+                   po.distance_km, po.agreed_fee,
+                   tu.phone AS client_phone, tu.full_name AS client_name
+            FROM parcel_bids pb
+            JOIN parcel_orders po ON pb.parcel_order_id = po.id
+            JOIN telegram_users tu ON po.sender_telegram_id = tu.id
+            WHERE pb.driver_id = :did
+              AND pb.created_at >= (NOW() - INTERVAL 24 HOUR)
+            ORDER BY pb.id DESC";
+
+    $stmt = $pdo->prepare($sql);
+    $stmt->execute(['did' => $driver['id']]);
+
+    jsonResponse([
+        'success' => true,
+        'bids'    => $stmt->fetchAll(PDO::FETCH_ASSOC)
     ]);
 }
 

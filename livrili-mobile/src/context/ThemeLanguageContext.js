@@ -171,7 +171,7 @@ const translations = {
     walletBalance: 'Solde et Tarifs Officiels',
     cashOnDelivery: 'Paiement Cash à la livraison',
     officialRatesTitle: 'Grille Tarifaire Officielle Livrili',
-    driverSpaceTitle: 'Espace Transporteur',
+    driverSpaceTitle: 'Espace Livreur',
     statusOnline: 'EN LIGNE (Prêt à recevoir)',
     statusOffline: 'HORS LIGNE',
     goOfflineBtn: 'Passer Hors Ligne',

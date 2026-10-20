@@ -17,6 +17,7 @@ import SettingsScreen from '../screens/customer/SettingsScreen';
 import DriverDashboardScreen from '../screens/driver/DriverDashboardScreen';
 import DriverPoolScreen from '../screens/driver/DriverPoolScreen';
 import DriverRegisterScreen from '../screens/driver/DriverRegisterScreen';
+import DriverBidsScreen from '../screens/driver/DriverBidsScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
@@ -116,6 +117,11 @@ function DriverTabs() {
         name="DriverPool"
         component={DriverPoolScreen}
         options={{ title: t('availablePoolTitle') }}
+      />
+      <Tab.Screen
+        name="DriverBids"
+        component={DriverBidsScreen}
+        options={{ title: 'Mes Offres' }}
       />
       <Tab.Screen
         name="DriverSettings"
