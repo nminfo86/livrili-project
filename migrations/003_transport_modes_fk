@@ -1,0 +1,40 @@
+SET FOREIGN_KEY_CHECKS = 0;
+
+-- 1. S'assurer que la table parente transport_modes utilise bien utf8mb4_unicode_ci
+ALTER TABLE `transport_modes`
+  CONVERT TO CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci,
+  MODIFY `id` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL;
+
+-- 2. Adapter la colonne vehicle_type dans driver_profiles et parcel_orders
+ALTER TABLE `driver_profiles`
+  MODIFY `vehicle_type` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'moto';
+
+ALTER TABLE `parcel_orders`
+  MODIFY `vehicle_type` varchar(30) COLLATE utf8mb4_unicode_ci NOT NULL DEFAULT 'moto';
+
+-- 3. Sécurité : rattacher à 'moto' toute valeur qui n'existerait pas dans transport_modes
+UPDATE `driver_profiles` 
+SET `vehicle_type` = 'moto' 
+WHERE `vehicle_type` NOT IN (SELECT `id` FROM `transport_modes`);
+
+UPDATE `parcel_orders` 
+SET `vehicle_type` = 'moto' 
+WHERE `vehicle_type` NOT IN (SELECT `id` FROM `transport_modes`);
+
+-- 4. Ajouter les index et les clés étrangères (Relations)
+ALTER TABLE `driver_profiles`
+  ADD KEY `idx_dp_vehicle_type` (`vehicle_type`),
+  ADD CONSTRAINT `fk_driver_profiles_transport_mode`
+    FOREIGN KEY (`vehicle_type`) REFERENCES `transport_modes` (`id`)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+ALTER TABLE `parcel_orders`
+  ADD KEY `idx_po_vehicle_type` (`vehicle_type`),
+  ADD CONSTRAINT `fk_parcel_orders_transport_mode`
+    FOREIGN KEY (`vehicle_type`) REFERENCES `transport_modes` (`id`)
+    ON DELETE RESTRICT ON UPDATE CASCADE;
+
+-- 5. Approuver les profils livreurs existants pour débloquer l'affichage du Pool
+UPDATE `driver_profiles` SET `verification_status` = 'approved', `is_online` = 1;
+
+SET FOREIGN_KEY_CHECKS = 1;

@@ -3,8 +3,21 @@
 require_once __DIR__ . '/bootstrap.php';
 require_once dirname(__DIR__) . '/handlers/DispatchService.php';
 
-$user = requireAuth($pdo);
 $action = $_GET['action'] ?? '';
+
+// -------------------------------------------------------------------------
+// 0. RÉCUPÉRATION DYNAMIQUE DES MODES DE TRANSPORT ET PARAMÈTRES DE PRIX
+// -------------------------------------------------------------------------
+if ($action === 'get_transport_modes') {
+    $dispatch = new DispatchService($pdo, Config::$botToken ?? '');
+    $modes = $dispatch->getActiveTransportModes();
+    jsonResponse([
+        'success'         => true,
+        'transport_modes' => $modes
+    ]);
+}
+
+$user = requireAuth($pdo);
 $input = getJsonInput();
 
 // -------------------------------------------------------------------------
@@ -15,25 +28,46 @@ if ($action === 'create_order') {
     $pickupLat    = (float)($input['pickup_lat'] ?? 0);
     $pickupLon    = (float)($input['pickup_lon'] ?? 0);
     $pickupComm   = trim($input['pickup_commune'] ?? 'El Eulma');
-
     $delivAddr    = trim($input['delivery_address'] ?? '');
     $delivLat     = !empty($input['delivery_lat']) ? (float)$input['delivery_lat'] : null;
     $delivLon     = !empty($input['delivery_lon']) ? (float)$input['delivery_lon'] : null;
-    $recipPhone   = trim($input['recipient_phone'] ?? '');
-
-    $vTypes       = trim($input['vehicle_type'] ?? 'moto'); // ex: "moto" ou "moto,voiture"
-    $desc         = trim($input['parcel_description'] ?? '');
+    $delivComm    = trim($input['delivery_commune'] ?? $pickupComm);
+    $recipPhone   = preg_replace('/[^\d]/', '', $input['recipient_phone'] ?? '');
+    $vTypes       = trim($input['vehicle_type'] ?? 'moto');
+    $desc         = trim($input['parcel_description'] ?? 'Colis / Carton');
     $paymentBy    = in_array($input['payment_by'] ?? '', ['sender', 'recipient']) ? $input['payment_by'] : 'sender';
     $isRoundTrip  = !empty($input['is_round_trip']) ? 1 : 0;
 
-    if (!$pickupAddr || !$delivAddr || !$recipPhone || !$desc) {
-        jsonResponse(['success' => false, 'error' => 'Tous les champs obligatoires doivent être renseignés']);
+    if (!$pickupAddr || !$delivAddr) {
+        jsonResponse(['success' => false, 'error' => 'Les adresses de départ et de destination sont obligatoires.']);
     }
 
-    // Calcul du tarif estimé sur le premier véhicule choisi
+    // Contrôle obligatoire du téléphone mobile algérien (05, 06, 07 + 8 chiffres)
+    if (!preg_match('/^(05|06|07)[0-9]{8}$/', $recipPhone)) {
+        jsonResponse([
+            'success' => false,
+            'error'   => 'Le numéro de téléphone du destinataire est obligatoire et doit commencer par 05, 06 ou 07 (10 chiffres).'
+        ]);
+    }
+
+    // Si aucune description n'est fournie, valeur par défaut
+    if ($desc === '') {
+        $desc = 'Colis standard';
+    }
+
+    // Calcul du tarif estimé sur le véhicule choisi avec les paramètres BDD
     $dispatch = new DispatchService($pdo, Config::$botToken);
     $firstVType = explode(',', $vTypes)[0];
-    $priceInfo = $dispatch->calculateSuggestedPrice($pickupLat, $pickupLon, $delivLat, $delivLon, $firstVType, (bool)$isRoundTrip);
+    $priceInfo = $dispatch->calculateSuggestedPrice(
+        $pickupLat,
+        $pickupLon,
+        $delivLat,
+        $delivLon,
+        $firstVType,
+        (bool)$isRoundTrip,
+        $pickupComm,
+        $delivComm
+    );
 
     $code = 'LV-' . strtoupper(substr(uniqid(), -5));
 
@@ -52,7 +86,7 @@ if ($action === 'create_order') {
     $stmt = $pdo->prepare($sql);
     $stmt->execute([
         'code'   => $code,
-        'tid'    => $user['id'], // ID utilisateur comme référence
+        'tid'    => $user['id'],
         'sphone' => $user['phone'],
         'plat'   => $pickupLat,
         'plon'   => $pickupLon,
@@ -74,13 +108,15 @@ if ($action === 'create_order') {
     $dispatchResult = $dispatch->dispatchParcelToDrivers($orderId);
 
     jsonResponse([
-        'success'    => true,
-        'order_id'   => $orderId,
-        'code'       => $code,
-        'dispatched' => $dispatchResult['notified_count'] ?? 0
+        'success'         => true,
+        'order_id'        => $orderId,
+        'code'            => $code,
+        'estimated_price' => $priceInfo['suggested_price'],
+        'distance_km'     => $priceInfo['distance_km'],
+        'dispatched'      => $dispatchResult['notified_count'] ?? 0,
+        'message'         => 'Le système est en train de chercher des livreurs proches...'
     ]);
 }
-
 // -------------------------------------------------------------------------
 // 2. SUIVI DES COURSES DU JOUR (1 seule livrée max + toutes les actives)
 // -------------------------------------------------------------------------
