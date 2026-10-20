@@ -1,41 +1,84 @@
-import React from 'react';
-import { View, Text, StyleSheet, ScrollView } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+// src/screens/customer/WalletScreen.js
+import React, { useState, useEffect } from 'react';
+import { View, Text, StyleSheet, ScrollView, ActivityIndicator } from 'react-native';
+import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
 import { useThemeLang, COLORS } from '../../context/ThemeLanguageContext';
+import apiClient from '../../api/client';
 
 export default function WalletScreen() {
-  const { t } = useThemeLang();
+  const { t, isRTL } = useThemeLang();
+  const [modes, setModes] = useState([]);
+  const [loading, setLoading] = useState(true);
+
+  const rowDir = isRTL ? 'row-reverse' : 'row';
+  const textAlignDir = isRTL ? 'right' : 'left';
+
+  useEffect(() => {
+    apiClient
+      .get('customer.php?action=get_transport_modes')
+      .then((res) => {
+        if (res.data?.transport_modes) {
+          setModes(res.data.transport_modes);
+        }
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={{ padding: 20 }}>
       <View style={styles.balanceCard}>
-        <View style={styles.cardHeader}>
+        <View style={[styles.cardHeader, { flexDirection: rowDir }]}>
           <Ionicons name="wallet-outline" size={28} color="#FFF" />
           <Text style={styles.cardBadge}>ALGÉRIE DZD</Text>
         </View>
-        <Text style={styles.balanceLabel}>{t('walletBalance')}</Text>
-        <Text style={styles.balanceValue}>Paiement Cash à la livraison</Text>
+        <Text style={[styles.balanceLabel, { textAlign: textAlignDir }]}>
+          {t('walletBalance')}
+        </Text>
+        <Text style={[styles.balanceValue, { textAlign: textAlignDir }]}>
+          {t('cashOnDelivery')}
+        </Text>
       </View>
 
-      <Text style={styles.sectionTitle}>Grille Tarifaire Officielle Livrili</Text>
+      <Text style={[styles.sectionTitle, { textAlign: textAlignDir }]}>
+        {t('officialRatesTitle')}
+      </Text>
 
-      {[
-        { title: 'Moto Express', base: '200 DA', km: '50 DA / km' },
-        { title: 'Voiture', base: '350 DA', km: '70 DA / km' },
-        { title: 'Camionnette (DFSK / Harbin)', base: '600 DA', km: '100 DA / km' },
-        { title: 'Fourgon', base: '900 DA', km: '150 DA / km' },
-      ].map((item, idx) => (
-        <View key={idx} style={styles.rateRow}>
-          <View>
-            <Text style={styles.rateTitle}>{item.title}</Text>
-            <Text style={styles.rateSub}>2 premiers km inclus</Text>
-          </View>
-          <View style={{ alignItems: 'flex-end' }}>
-            <Text style={styles.rateBase}>Départ : {item.base}</Text>
-            <Text style={styles.rateKm}>+ {item.km}</Text>
-          </View>
-        </View>
-      ))}
+      {loading ? (
+        <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 20 }} />
+      ) : (
+        modes.map((item) => {
+          const vehicleTitle = isRTL && item.title_ar ? item.title_ar : item.title_fr;
+          return (
+            <View key={item.id} style={[styles.rateRow, { flexDirection: rowDir }]}>
+              <View style={{ flexDirection: rowDir, alignItems: 'center', flex: 1 }}>
+                <MaterialCommunityIcons
+                  name={item.icon || 'motorbike'}
+                  size={28}
+                  color={item.color || COLORS.primary}
+                  style={{ marginHorizontal: 10 }}
+                />
+                <View style={{ flex: 1 }}>
+                  <Text style={[styles.rateTitle, { textAlign: textAlignDir }]}>
+                    {vehicleTitle}
+                  </Text>
+                  <Text style={[styles.rateSub, { textAlign: textAlignDir }]}>
+                    {item.pricing_mode === 'flat_commune'
+                      ? `${t('flatCommuneDesc')} ${item.commune_max_km} km)`
+                      : `${item.base_km} ${t('firstKmIncluded')}`}
+                  </Text>
+                </View>
+              </View>
+              <View style={{ alignItems: isRTL ? 'flex-start' : 'flex-end' }}>
+                <Text style={styles.rateBase}>
+                  {t('baseRateLabel')} {item.base_price} DA
+                </Text>
+                <Text style={styles.rateKm}>+ {item.per_km} DA / km</Text>
+              </View>
+            </View>
+          );
+        })
+      )}
     </ScrollView>
   );
 }
@@ -49,7 +92,6 @@ const styles = StyleSheet.create({
     marginBottom: 24,
   },
   cardHeader: {
-    flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     marginBottom: 14,
@@ -72,11 +114,10 @@ const styles = StyleSheet.create({
     marginBottom: 12,
   },
   rateRow: {
-    backgroundColor: '#FFF',
+    backgroundColor: COLORS.white,
     padding: 16,
     borderRadius: 14,
     marginBottom: 10,
-    flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
     borderWidth: 1,
