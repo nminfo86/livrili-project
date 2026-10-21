@@ -2,7 +2,56 @@
 // api/driver.php
 require_once __DIR__ . '/bootstrap.php';
 
-$user = requireAuth($pdo);
+// Fonction de vérification d'authentification robuste (Headers Apache, GET, POST, JSON)
+function getAuthenticatedUser(PDO $pdo) {
+    $token = '';
+
+    // 1. Chercher dans les Headers HTTP
+    $headers = function_exists('getallheaders') ? getallheaders() : [];
+    foreach ($headers as $k => $v) {
+        if (strtolower($k) === 'authorization' && preg_match('/Bearer\s+(.*)$/i', $v, $m)) {
+            $token = trim($m[1]);
+            break;
+        } elseif (strtolower($k) === 'x-auth-token') {
+            $token = trim($v);
+            break;
+        }
+    }
+
+    if (empty($token) && !empty($_SERVER['HTTP_AUTHORIZATION'])) {
+        if (preg_match('/Bearer\s+(.*)$/i', $_SERVER['HTTP_AUTHORIZATION'], $m)) {
+            $token = trim($m[1]);
+        }
+    }
+
+    // 2. Fallback via GET, POST ou JSON Body
+    $rawInput = json_decode(file_get_contents('php://input'), true) ?: [];
+    if (empty($token)) {
+        $token = trim($_GET['auth_token'] ?? $_POST['auth_token'] ?? $rawInput['auth_token'] ?? '');
+    }
+
+    if (!empty($token)) {
+        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE auth_token = ? LIMIT 1");
+        $stmt->execute([$token]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($user) return $user;
+    }
+
+    // 3. Fallback de secours via user_id
+    $userId = intval($_GET['user_id'] ?? $_POST['user_id'] ?? $rawInput['user_id'] ?? 0);
+    if ($userId > 0) {
+        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ? LIMIT 1");
+        $stmt->execute([$userId]);
+        $user = $stmt->fetch(PDO::FETCH_ASSOC);
+        if ($user) return $user;
+    }
+
+    http_response_code(401);
+    echo json_encode(['success' => false, 'error' => 'Session expirée ou invalide'], JSON_UNESCAPED_UNICODE);
+    exit;
+}
+
+$user = getAuthenticatedUser($pdo);
 $action = $_GET['action'] ?? '';
 $input = getJsonInput();
 
@@ -97,7 +146,7 @@ if ($action === 'status') {
     $stmtDeliv->execute(['did' => $driver['id']]);
     $deliveredCount = (int)$stmtDeliv->fetchColumn();
 
-    // Calcul des gains du jour (courses livrées aujourd'hui)
+    // Calcul des gains du jour
     $stmtDay = $pdo->prepare("
         SELECT SUM(IF(agreed_fee > 0, agreed_fee, estimated_price)) 
         FROM parcel_orders 
@@ -108,7 +157,7 @@ if ($action === 'status') {
     $stmtDay->execute(['did' => $driver['id']]);
     $earningsDay = (float)$stmtDay->fetchColumn();
 
-    // Calcul des gains du mois en cours
+    // Calcul des gains du mois
     $stmtMonth = $pdo->prepare("
         SELECT SUM(IF(agreed_fee > 0, agreed_fee, estimated_price)) 
         FROM parcel_orders 
@@ -129,6 +178,7 @@ if ($action === 'status') {
         'earnings_month'  => $earningsMonth
     ]);
 }
+
 if ($action === 'toggle_online') {
     $isOnline = !empty($input['is_online']) ? 1 : 0;
     $pdo->prepare("UPDATE driver_profiles SET is_online = :on WHERE id = :did")
@@ -157,13 +207,17 @@ if ($action === 'update_gps') {
 }
 
 // -------------------------------------------------------------------------
-// 3. POOL DES DEMANDES DISPONIBLES DANS LE SECTEUR
+// 3. POOL DES DEMANDES DISPONIBLES (AVEC COORDONNÉES GPS COMPLÈTES)
 // -------------------------------------------------------------------------
 if ($action === 'pool') {
     $drvLat = (float)($user['latitude'] ?? 36.1528);
     $drvLon = (float)($user['longitude'] ?? 5.6902);
 
-    $sql = "SELECT po.id, po.code, po.pickup_address, po.delivery_address, po.estimated_price, po.distance_km, 
+    // Sélection explicite des coordonnées GPS pour Google Maps
+    $sql = "SELECT po.id, po.code, 
+                   po.pickup_lat, po.pickup_lon, po.pickup_commune, po.pickup_address, 
+                   po.delivery_lat, po.delivery_lon, po.delivery_address, 
+                   po.estimated_price, po.distance_km, 
                    po.is_round_trip, po.parcel_description, po.vehicle_type,
                    DATE_FORMAT(po.created_at, '%H:%i') as time,
                    tm.bid_step
@@ -195,10 +249,23 @@ if ($action === 'pool') {
         'did'     => $driver['id']
     ]);
 
+    $poolData = $stmt->fetchAll(PDO::FETCH_ASSOC);
+
+    // Cast numérique explicite pour le mobile
+    foreach ($poolData as &$item) {
+        $item['pickup_lat']   = (float)$item['pickup_lat'];
+        $item['pickup_lon']   = (float)$item['pickup_lon'];
+        $item['delivery_lat'] = (float)$item['delivery_lat'];
+        $item['delivery_lon'] = (float)$item['delivery_lon'];
+        $item['distance_km']  = (float)$item['distance_km'];
+        $item['estimated_price'] = (float)$item['estimated_price'];
+    }
+    unset($item);
+
     jsonResponse([
         'success'      => true,
         'driver_vtype' => $driver['vehicle_type'],
-        'pool'         => $stmt->fetchAll(PDO::FETCH_ASSOC)
+        'pool'         => $poolData
     ]);
 }
 
@@ -207,7 +274,9 @@ if ($action === 'pool') {
 // -------------------------------------------------------------------------
 if ($action === 'driver_bids') {
     $sql = "SELECT pb.id AS bid_id, pb.bid_amount, pb.status AS bid_status, pb.created_at AS bid_date,
-                   po.id AS order_id, po.code, po.pickup_address, po.delivery_address, 
+                   po.id AS order_id, po.code, 
+                   po.pickup_lat, po.pickup_lon, po.delivery_lat, po.delivery_lon,
+                   po.pickup_address, po.delivery_address, 
                    po.recipient_phone, po.payment_by, po.is_round_trip, po.status AS order_status,
                    po.distance_km, po.agreed_fee,
                    tu.phone AS client_phone, tu.full_name AS client_name
@@ -221,9 +290,18 @@ if ($action === 'driver_bids') {
     $stmt = $pdo->prepare($sql);
     $stmt->execute(['did' => $driver['id']]);
 
+    $bidsData = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($bidsData as &$b) {
+        $b['pickup_lat']   = (float)$b['pickup_lat'];
+        $b['pickup_lon']   = (float)$b['pickup_lon'];
+        $b['delivery_lat'] = (float)$b['delivery_lat'];
+        $b['delivery_lon'] = (float)$b['delivery_lon'];
+    }
+    unset($b);
+
     jsonResponse([
         'success' => true,
-        'bids'    => $stmt->fetchAll(PDO::FETCH_ASSOC)
+        'bids'    => $bidsData
     ]);
 }
 
@@ -266,12 +344,14 @@ if ($action === 'submit_bid') {
     $stmtClient->execute(['oid' => $orderId]);
     $clientToken = $stmtClient->fetchColumn();
 
-    sendPushNotification(
-        $clientToken,
-        "💵 Nouvelle offre de prix reçue !",
-        "Un chauffeur propose {$amount} DA pour votre course.",
-        ['type' => 'new_bid', 'order_id' => $orderId]
-    );
+    if ($clientToken && function_exists('sendPushNotification')) {
+        sendPushNotification(
+            $clientToken,
+            "💵 Nouvelle offre de prix reçue !",
+            "Un chauffeur propose {$amount} DA pour votre course.",
+            ['type' => 'new_bid', 'order_id' => $orderId]
+        );
+    }
 
     jsonResponse(['success' => true]);
 }

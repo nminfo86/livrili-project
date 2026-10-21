@@ -1,165 +1,249 @@
+// src/navigation/AppNavigator.js
 import React, { useContext } from 'react';
-import { ActivityIndicator, View } from 'react-native';
+import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Ionicons } from '@expo/vector-icons';
+import { Ionicons, Fontisto } from '@expo/vector-icons';
 
 import { AuthContext } from '../context/AuthContext';
-import { useThemeLang, COLORS } from '../context/ThemeLanguageContext';
+import { useThemeLang, COLORS, FONTS, SHADOWS } from '../context/ThemeLanguageContext';
 
+// Écrans d'authentification
 import LoginScreen from '../screens/auth/LoginScreen';
+
+// Écrans Client
 import NewOrderScreen from '../screens/customer/NewOrderScreen';
 import OrdersScreen from '../screens/customer/OrdersScreen';
-import WalletScreen from '../screens/customer/WalletScreen';
 import SettingsScreen from '../screens/customer/SettingsScreen';
 
+// Écrans Livreur
 import DriverDashboardScreen from '../screens/driver/DriverDashboardScreen';
 import DriverPoolScreen from '../screens/driver/DriverPoolScreen';
-import DriverRegisterScreen from '../screens/driver/DriverRegisterScreen';
 import DriverBidsScreen from '../screens/driver/DriverBidsScreen';
+import DriverRegisterScreen from '../screens/driver/DriverRegisterScreen';
 
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-function CustomerTabs() {
-  const { t } = useThemeLang();
+function WalletPlaceholderScreen() {
+  const { isRTL } = useThemeLang();
+  return (
+    <View style={styles.centered}>
+      <Ionicons name="wallet-outline" size={64} color={COLORS.primary} />
+      <Text style={[styles.placeholderTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
+        {isRTL ? 'المحفظة قريباً' : 'Portefeuille bientôt disponible'}
+      </Text>
+      <Text style={[styles.placeholderSub, { textAlign: isRTL ? 'right' : 'left' }]}>
+        {isRTL ? 'إدارة الأرصدة والمدفوعات' : 'Gestion des soldes et paiements de livraison'}
+      </Text>
+    </View>
+  );
+}
+
+// ------------------------------------------------------------------
+// 1. NAVIGATION CLIENT (INVERSION NATIVE RTL EN ARABE / DARJA)
+// ------------------------------------------------------------------
+function CustomerTabNavigator() {
+  const { isRTL } = useThemeLang();
+
+  // Définition des onglets
+  const tabScreens = [
+    <Tab.Screen
+      key="home"
+      name="Home"
+      component={NewOrderScreen}
+      options={{
+        tabBarLabel: isRTL ? 'الرئيسية' : 'Accueil',
+        tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
+      }}
+    />,
+    <Tab.Screen
+      key="orders"
+      name="Orders"
+      component={OrdersScreen}
+      options={{
+        tabBarLabel: isRTL ? 'طلباتي' : 'Mes Courses',
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons name="receipt-outline" size={size} color={color} />
+        ),
+      }}
+    />,
+    <Tab.Screen
+      key="wallet"
+      name="Wallet"
+      component={WalletPlaceholderScreen}
+      options={{
+        tabBarLabel: isRTL ? 'المحفظة' : 'Portefeuille',
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons name="wallet-outline" size={size} color={color} />
+        ),
+      }}
+    />,
+    <Tab.Screen
+      key="settings"
+      name="Settings"
+      component={SettingsScreen}
+      options={{
+        tabBarLabel: isRTL ? 'الإعدادات' : 'Paramètres',
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons name="settings-outline" size={size} color={color} />
+        ),
+      }}
+    />,
+  ];
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
+      key={isRTL ? 'customer-tabs-rtl' : 'customer-tabs-ltr'}
+      initialRouteName="Home"
+      screenOptions={{
         headerShown: false,
         tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: '#64748B',
+        tabBarInactiveTintColor: '#94A3B8',
         tabBarStyle: {
-          height: 64,
-          paddingBottom: 8,
-          paddingTop: 6,
-          backgroundColor: '#FFFFFF',
+          backgroundColor: COLORS.white,
           borderTopWidth: 1,
-          borderTopColor: '#E2E8F0',
-          elevation: 10,
+          borderTopColor: COLORS.border,
+          height: Platform.OS === 'ios' ? 84 : 64,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+          paddingTop: 8,
+          ...SHADOWS.card,
         },
         tabBarLabelStyle: {
+          fontFamily: FONTS.bold,
           fontSize: 11,
-          fontWeight: '700',
+          fontWeight: '800',
         },
-        tabBarIcon: ({ focused, color }) => {
-          let iconName = 'home-outline';
-          if (route.name === 'Home') {
-            iconName = focused ? 'home' : 'home-outline';
-          } else if (route.name === 'Orders') {
-            iconName = focused ? 'list-circle' : 'list-circle-outline';
-          } else if (route.name === 'Wallet') {
-            iconName = focused ? 'wallet' : 'wallet-outline';
-          } else if (route.name === 'Settings') {
-            iconName = focused ? 'settings' : 'settings-outline';
-          }
-          return <Ionicons name={iconName} size={24} color={color} />;
-        },
-      })}
+      }}
     >
-      <Tab.Screen
-        name="Home"
-        component={NewOrderScreen}
-        options={{ tabBarLabel: t('home') }}
-      />
-      <Tab.Screen
-        name="Orders"
-        component={OrdersScreen}
-        options={{ tabBarLabel: t('myBookings') }}
-      />
-      <Tab.Screen
-        name="Wallet"
-        component={WalletScreen}
-        options={{ tabBarLabel: t('myWallet') }}
-      />
-      <Tab.Screen
-        name="Settings"
-        component={SettingsScreen}
-        options={{ tabBarLabel: t('settings') }}
-      />
+      {/* En RTL, la liste est inversée pour que "Accueil" soit placé à l'extrême droite */}
+      {isRTL ? tabScreens.slice().reverse() : tabScreens}
     </Tab.Navigator>
   );
 }
 
-function DriverTabs() {
-  const { t } = useThemeLang();
+// ------------------------------------------------------------------
+// 2. NAVIGATION LIVREUR (INVERSION NATIVE RTL EN ARABE / DARJA)
+// ------------------------------------------------------------------
+function DriverTabNavigator() {
+  const { isRTL } = useThemeLang();
+
+  const driverScreens = [
+    <Tab.Screen
+      key="pool"
+      name="DriverPool"
+      component={DriverPoolScreen}
+      options={{
+        tabBarLabel: isRTL ? 'الطلبات المتاحة' : 'Disponibles',
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons name="navigate-circle-outline" size={size} color={color} />
+        ),
+      }}
+    />,
+    <Tab.Screen
+      key="bids"
+      name="DriverBids"
+      component={DriverBidsScreen}
+      options={{
+        tabBarLabel: isRTL ? 'عروضي' : 'Mes Offres',
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons name="time-outline" size={size} color={color} />
+        ),
+      }}
+    />,
+    <Tab.Screen
+      key="dashboard"
+      name="DriverDashboard"
+      component={DriverDashboardScreen}
+      options={{
+        tabBarLabel: isRTL ? 'لوحة القيادة' : 'Tableau de bord',
+        tabBarIcon: ({ color }) => (
+          <Fontisto name="motorcycle" size={20} color={color} />
+        ),
+      }}
+    />,
+    <Tab.Screen
+      key="driver-settings"
+      name="DriverSettings"
+      component={SettingsScreen}
+      options={{
+        tabBarLabel: isRTL ? 'الإعدادات' : 'Paramètres',
+        tabBarIcon: ({ color, size }) => (
+          <Ionicons name="settings-outline" size={size} color={color} />
+        ),
+      }}
+    />,
+  ];
 
   return (
     <Tab.Navigator
-      screenOptions={({ route }) => ({
-        headerShown: true,
-        headerStyle: { backgroundColor: COLORS.primary },
-        headerTintColor: '#FFF',
+      key={isRTL ? 'driver-tabs-rtl' : 'driver-tabs-ltr'}
+      initialRouteName="DriverPool"
+      screenOptions={{
+        headerShown: false,
         tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: '#64748B',
-        tabBarStyle: { height: 64, paddingBottom: 8, paddingTop: 6 },
-        tabBarIcon: ({ focused, color }) => {
-          let iconName = 'speedometer-outline';
-          if (route.name === 'DriverDashboard') {
-            iconName = focused ? 'speedometer' : 'speedometer-outline';
-          } else if (route.name === 'DriverPool') {
-            iconName = focused ? 'navigate-circle' : 'navigate-circle-outline';
-          } else if (route.name === 'DriverSettings') {
-            iconName = focused ? 'settings' : 'settings-outline';
-          }
-          return <Ionicons name={iconName} size={24} color={color} />;
+        tabBarInactiveTintColor: '#94A3B8',
+        tabBarStyle: {
+          backgroundColor: COLORS.white,
+          borderTopWidth: 1,
+          borderTopColor: COLORS.border,
+          height: Platform.OS === 'ios' ? 84 : 64,
+          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
+          paddingTop: 8,
+          ...SHADOWS.card,
         },
-      })}
+        tabBarLabelStyle: {
+          fontFamily: FONTS.bold,
+          fontSize: 11,
+          fontWeight: '800',
+        },
+      }}
     >
-      <Tab.Screen
-        name="DriverDashboard"
-        component={DriverDashboardScreen}
-        options={{ title: t('driverDashboardTab') }}
-      />
-      <Tab.Screen
-        name="DriverPool"
-        component={DriverPoolScreen}
-        options={{ title: t('availablePoolTitle') }}
-      />
-      <Tab.Screen
-        name="DriverBids"
-        component={DriverBidsScreen}
-        options={{ title: 'Mes Offres' }}
-      />
-      <Tab.Screen
-        name="DriverSettings"
-        component={SettingsScreen}
-        options={{ title: t('settings'), headerShown: false }}
-      />
+      {isRTL ? driverScreens.slice().reverse() : driverScreens}
     </Tab.Navigator>
   );
 }
 
+// ------------------------------------------------------------------
+// 3. NAVIGATEUR PRINCIPAL
+// ------------------------------------------------------------------
 export default function AppNavigator() {
   const { user, loading } = useContext(AuthContext);
 
   if (loading) {
     return (
-      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
+      <View style={styles.loadingContainer}>
         <ActivityIndicator size="large" color={COLORS.primary} />
       </View>
     );
   }
 
+  const isDriverMode = user && user.current_mode === 'driver';
+
   return (
     <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false }}>
+      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
         {!user ? (
-          <Stack.Screen name="Login" component={LoginScreen} />
-        ) : user.current_mode === 'driver' && (user.role === 'driver' || user.role === 'admin' || user.is_driver) ? (
           <>
-            <Stack.Screen name="DriverMain" component={DriverTabs} />
-            <Stack.Screen name="DriverRegister" component={DriverRegisterScreen} />
+            <Stack.Screen name="Login" component={LoginScreen} />
           </>
-        ) : (
+        ) : isDriverMode ? (
           <>
-            <Stack.Screen name="CustomerMain" component={CustomerTabs} />
+            <Stack.Screen name="DriverTabs" component={DriverTabNavigator} />
             <Stack.Screen
               name="DriverRegister"
               component={DriverRegisterScreen}
-              options={{ headerShown: true, title: 'Devenir Livreur Livrili' }}
+              options={{ animation: 'slide_from_bottom' }}
+            />
+          </>
+        ) : (
+          <>
+            <Stack.Screen name="CustomerTabs" component={CustomerTabNavigator} />
+            <Stack.Screen
+              name="DriverRegister"
+              component={DriverRegisterScreen}
+              options={{ animation: 'slide_from_bottom' }}
             />
           </>
         )}
@@ -167,3 +251,32 @@ export default function AppNavigator() {
     </NavigationContainer>
   );
 }
+
+const styles = StyleSheet.create({
+  loadingContainer: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+  },
+  centered: {
+    flex: 1,
+    backgroundColor: COLORS.background,
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: 20,
+  },
+  placeholderTitle: {
+    fontFamily: FONTS.bold,
+    fontSize: 18,
+    fontWeight: '900',
+    color: COLORS.textDark,
+    marginTop: 14,
+  },
+  placeholderSub: {
+    fontFamily: FONTS.medium,
+    fontSize: 13,
+    color: COLORS.textMuted,
+    marginTop: 4,
+  },
+});

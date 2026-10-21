@@ -9,19 +9,30 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
+  Image,
 } from 'react-native';
 import * as Location from 'expo-location';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import { Ionicons, MaterialCommunityIcons, Fontisto } from '@expo/vector-icons';
 import API from '../../api/client';
-import { useThemeLang, COLORS } from '../../context/ThemeLanguageContext';
+import { useThemeLang, COLORS, FONTS, SHADOWS } from '../../context/ThemeLanguageContext';
+import {
+  isValidFullName,
+  isValidCommune,
+  isValidBrand,
+  isValidColor,
+  isValidPlate,
+  isValidPhoto,
+} from '../../utils/validators';
 
 export default function DriverRegisterScreen({ navigation }) {
   const { t, isRTL } = useThemeLang();
   const [fullName, setFullName] = useState('');
   const [commune, setCommune] = useState('El Eulma');
   const [gpsLoading, setGpsLoading] = useState(false);
+
   const [transportModes, setTransportModes] = useState([
-    { id: 'moto', title_fr: 'Moto', title_ar: 'دراجة نارية', icon: 'motorbike' },
+    { id: 'moto', title_fr: 'Moto', title_ar: 'دراجة نارية', icon: 'moped' },
     { id: 'camionnette', title_fr: 'Chana / Harbin', title_ar: 'شاحنة صغيرة', icon: 'truck-flatbed' },
     { id: 'fourgon', title_fr: 'Fourgon', title_ar: 'فورغون', icon: 'truck-delivery' },
   ]);
@@ -29,6 +40,8 @@ export default function DriverRegisterScreen({ navigation }) {
   const [brand, setBrand] = useState('');
   const [color, setColor] = useState('');
   const [plate, setPlate] = useState('');
+  const [photoUri, setPhotoUri] = useState(null);
+  const [photoBase64, setPhotoBase64] = useState(null);
   const [loading, setLoading] = useState(false);
   const [submittedAttempt, setSubmittedAttempt] = useState(false);
 
@@ -47,7 +60,6 @@ export default function DriverRegisterScreen({ navigation }) {
       .catch(() => {});
   }, []);
 
-  // Toujours en Français pour l'homogénéité de la BDD
   const detectCommuneInFrench = async () => {
     setGpsLoading(true);
     try {
@@ -72,96 +84,104 @@ export default function DriverRegisterScreen({ navigation }) {
     }
   };
 
-  const isValidFullName = (v) => v.trim().length >= 3;
-  const isValidCommune = (v) => v.trim().length >= 2;
-  const isValidBrand = (v) => v.trim().length >= 2;
-  const isValidColor = (v) => v.trim().length >= 2;
-  const isValidPlate = (v) => v.trim().length >= 4;
+  const pickPhoto = async (fromCamera = false) => {
+    try {
+      const perm = fromCamera
+        ? await ImagePicker.requestCameraPermissionsAsync()
+        : await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (perm.status !== 'granted') return;
 
-  const getFieldBoxStyle = (valid) => [
+      const result = fromCamera
+        ? await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true, allowsEditing: true })
+        : await ImagePicker.launchImageLibraryAsync({ quality: 0.5, base64: true, allowsEditing: true });
+
+      if (!result.canceled && result.assets?.[0]) {
+        setPhotoUri(result.assets[0].uri);
+        setPhotoBase64(`data:image/jpeg;base64,${result.assets[0].base64}`);
+      }
+    } catch (e) {}
+  };
+
+  const nameOk = isValidFullName(fullName);
+  const communeOk = isValidCommune(commune);
+  const brandOk = isValidBrand(brand);
+  const colorOk = isValidColor(color);
+  const plateOk = isValidPlate(plate);
+  const photoOk = isValidPhoto(photoBase64);
+
+  const getFieldBoxStyle = (valid, val = '') => [
     styles.inputBox,
     { flexDirection: rowDir },
-    valid && { borderColor: COLORS.primary },
-    submittedAttempt && !valid && { borderColor: COLORS.danger, backgroundColor: COLORS.dangerLight },
+    valid && styles.inputBoxValid,
+    (submittedAttempt || val.length > 0) && !valid && styles.inputBoxError,
   ];
 
   const handleSubmit = async () => {
     setSubmittedAttempt(true);
-    if (
-      !isValidFullName(fullName) ||
-      !isValidCommune(commune) ||
-      !isValidBrand(brand) ||
-      !isValidColor(color) ||
-      !isValidPlate(plate)
-    ) {
+
+    if (!nameOk || !communeOk || !brandOk || !colorOk || !plateOk || !photoOk) {
       return;
     }
 
     setLoading(true);
     try {
-      const formData = new FormData();
-      formData.append('full_name', fullName.trim());
-      formData.append('commune_name', commune.trim());
-      formData.append('vehicle_type', vehicleType);
-      formData.append('brand', brand.trim());
-      formData.append('color', color.trim());
-      formData.append('plate_number', plate.trim());
-
-      const res = await API.post('driver.php?action=register', formData, {
-        headers: { 'Content-Type': 'multipart/form-data' },
+      const res = await API.post('auth.php?action=upgrade_to_driver', {
+        full_name: fullName.trim(),
+        commune_name: commune.trim(),
+        vehicle_type: vehicleType,
+        moto_brand: brand.trim(),
+        moto_color: color.trim(),
+        plate_number: plate.trim(),
+        photo_moto: photoBase64,
       });
 
-      if (res.data.success) {
-        Alert.alert('OK', res.data.message || 'Compte activé !');
+      if (res.data?.success) {
+        Alert.alert('Succès', res.data.message || 'Compte livreur activé !');
         navigation.goBack();
       } else {
-        Alert.alert('Erreur', res.data.error || "Erreur d'inscription");
+        Alert.alert('Erreur', res.data?.error || "Erreur d'inscription");
       }
     } catch (e) {
-      Alert.alert('Erreur', 'Impossible de joindre le serveur.');
+      Alert.alert('Erreur', e.response?.data?.error || 'Impossible de joindre le serveur.');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <ScrollView style={styles.container}>
+    <ScrollView style={styles.container} contentContainerStyle={{ paddingBottom: 30 }}>
       <View style={styles.card}>
-        <Text style={[styles.title, { textAlign: textAlignDir }]}>
-          {t('driverSectionTitle')}
-        </Text>
+        <Text style={[styles.title, { textAlign: textAlignDir }]}>{t('driverSectionTitle')}</Text>
 
         {/* NOM COMPLET */}
-        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('fullName')}</Text>
-        <View style={getFieldBoxStyle(isValidFullName(fullName))}>
+        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('fullName')} *</Text>
+        <View style={getFieldBoxStyle(nameOk, fullName)}>
           <TextInput
             style={[styles.input, { textAlign: textAlignDir }]}
             placeholder={t('fullNamePlaceholder')}
             value={fullName}
             onChangeText={setFullName}
           />
-          {isValidFullName(fullName) ? (
-            <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
-          ) : submittedAttempt ? (
+          {nameOk ? (
+            <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+          ) : (submittedAttempt || fullName.length > 0) ? (
             <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
           ) : null}
         </View>
-        {submittedAttempt && !isValidFullName(fullName) && (
+        {(submittedAttempt || fullName.length > 0) && !nameOk && (
           <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errFullName')}</Text>
         )}
 
         {/* COMMUNE EN FRANÇAIS */}
-        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('communeAutoGps')}</Text>
-        <View style={getFieldBoxStyle(isValidCommune(commune))}>
+        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('communeAutoGps')} *</Text>
+        <View style={getFieldBoxStyle(communeOk, commune)}>
           <TextInput
             style={[styles.input, { textAlign: textAlignDir, fontWeight: '700' }]}
             value={commune}
             onChangeText={setCommune}
           />
-          {isValidCommune(commune) && (
-            <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
-          )}
-          <TouchableOpacity onPress={detectCommuneInFrench} style={{ marginHorizontal: 4 }}>
+          {communeOk && <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />}
+          <TouchableOpacity onPress={detectCommuneInFrench} style={{ marginHorizontal: 6 }}>
             {gpsLoading ? (
               <ActivityIndicator size="small" color={COLORS.primary} />
             ) : (
@@ -169,89 +189,138 @@ export default function DriverRegisterScreen({ navigation }) {
             )}
           </TouchableOpacity>
         </View>
-        {submittedAttempt && !isValidCommune(commune) && (
+        {(submittedAttempt || commune.length > 0) && !communeOk && (
           <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errCommune')}</Text>
         )}
 
-        {/* TYPE DE VÉHICULE DYNAMIQUE */}
-        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('transportModeLabel')}</Text>
+        {/* TYPE DE VÉHICULE AVEC ICÔNE MOTO CORRIGÉE */}
+        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('transportModeLabel')} *</Text>
         <View style={[styles.vGrid, { flexDirection: rowDir }]}>
           {transportModes.map((v) => {
+            const active = vehicleType === v.id;
             const vLabel = isRTL && v.title_ar ? v.title_ar : v.title_fr;
             return (
               <TouchableOpacity
                 key={v.id}
-                style={[styles.vBtn, vehicleType === v.id && styles.vBtnActive]}
+                style={[styles.vBtn, active && styles.vBtnActive]}
                 onPress={() => setVehicleType(v.id)}
               >
-                <MaterialCommunityIcons
-                  name={v.icon || 'motorbike'}
-                  size={22}
-                  color={vehicleType === v.id ? COLORS.primary : '#64748B'}
-                />
-                <Text style={vehicleType === v.id ? styles.vTextActive : styles.vText}>
-                  {vLabel}
-                </Text>
+                {v.id === 'moto' ? (
+                  <Fontisto
+                    name="motorcycle"
+                    size={22}
+                    color={active ? COLORS.primary : '#64748B'}
+                  />
+                ) : (
+                  <MaterialCommunityIcons
+                    name={v.icon || 'truck-flatbed'}
+                    size={24}
+                    color={active ? COLORS.primary : '#64748B'}
+                  />
+                )}
+                <Text style={active ? styles.vTextActive : styles.vText}>{vLabel}</Text>
               </TouchableOpacity>
             );
           })}
         </View>
 
         {/* MARQUE ET MODÈLE */}
-        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('vehicleBrandLabel')}</Text>
-        <View style={getFieldBoxStyle(isValidBrand(brand))}>
+        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('vehicleBrandLabel')} *</Text>
+        <View style={getFieldBoxStyle(brandOk, brand)}>
           <TextInput
             style={[styles.input, { textAlign: textAlignDir }]}
             placeholder={t('vehicleBrandPlaceholder')}
             value={brand}
             onChangeText={setBrand}
           />
-          {isValidBrand(brand) ? (
-            <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
-          ) : submittedAttempt ? (
+          {brandOk ? (
+            <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+          ) : (submittedAttempt || brand.length > 0) ? (
             <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
           ) : null}
         </View>
-        {submittedAttempt && !isValidBrand(brand) && (
+        {(submittedAttempt || brand.length > 0) && !brandOk && (
           <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errBrand')}</Text>
         )}
 
         {/* COULEUR */}
-        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('vehicleColorLabel')}</Text>
-        <View style={getFieldBoxStyle(isValidColor(color))}>
+        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('vehicleColorLabel')} *</Text>
+        <View style={getFieldBoxStyle(colorOk, color)}>
           <TextInput
             style={[styles.input, { textAlign: textAlignDir }]}
             placeholder={t('vehicleColorPlaceholder')}
             value={color}
             onChangeText={setColor}
           />
-          {isValidColor(color) ? (
-            <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
-          ) : submittedAttempt ? (
+          {colorOk ? (
+            <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+          ) : (submittedAttempt || color.length > 0) ? (
             <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
           ) : null}
         </View>
-        {submittedAttempt && !isValidColor(color) && (
+        {(submittedAttempt || color.length > 0) && !colorOk && (
           <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errColor')}</Text>
         )}
 
         {/* MATRICULE */}
-        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('plateNumberLabel')}</Text>
-        <View style={getFieldBoxStyle(isValidPlate(plate))}>
+        <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('plateNumberLabel')} *</Text>
+        <View style={getFieldBoxStyle(plateOk, plate)}>
           <TextInput
             style={[styles.input, { textAlign: textAlignDir }]}
             placeholder={t('plateNumberPlaceholder')}
             value={plate}
             onChangeText={setPlate}
           />
-          {isValidPlate(plate) ? (
-            <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+          {plateOk ? (
+            <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
+          ) : (submittedAttempt || plate.length > 0) ? (
+            <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
+          ) : null}
+        </View>
+        {(submittedAttempt || plate.length > 0) && !plateOk && (
+          <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errPlate')}</Text>
+        )}
+
+        {/* PHOTO PREUVE DU VÉHICULE */}
+        <View
+          style={{
+            flexDirection: rowDir,
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            marginTop: 12,
+          }}
+        >
+          <Text style={[styles.label, { textAlign: textAlignDir, marginTop: 0 }]}>
+            {t('proofPhotoLabel')} *
+          </Text>
+          {photoOk ? (
+            <Ionicons name="checkmark-circle" size={20} color={COLORS.success} />
           ) : submittedAttempt ? (
             <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
           ) : null}
         </View>
-        {submittedAttempt && !isValidPlate(plate) && (
-          <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errPlate')}</Text>
+
+        <View style={[styles.photoRow, { flexDirection: rowDir }]}>
+          <TouchableOpacity
+            style={[styles.photoBtn, { flexDirection: rowDir }, submittedAttempt && !photoOk && styles.photoBtnErr]}
+            onPress={() => pickPhoto(true)}
+          >
+            <Ionicons name="camera-outline" size={20} color={COLORS.primary} />
+            <Text style={styles.photoBtnText}>{t('takePhotoBtn')}</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity
+            style={[styles.photoBtn, { flexDirection: rowDir }, submittedAttempt && !photoOk && styles.photoBtnErr]}
+            onPress={() => pickPhoto(false)}
+          >
+            <Ionicons name="images-outline" size={20} color={COLORS.primary} />
+            <Text style={styles.photoBtnText}>{t('galleryBtn')}</Text>
+          </TouchableOpacity>
+        </View>
+
+        {photoUri && <Image source={{ uri: photoUri }} style={styles.previewImg} />}
+        {submittedAttempt && !photoOk && (
+          <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errPhoto')}</Text>
         )}
 
         <TouchableOpacity style={styles.btnSubmit} onPress={handleSubmit} disabled={loading}>
@@ -268,38 +337,106 @@ export default function DriverRegisterScreen({ navigation }) {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: COLORS.background, padding: 14 },
-  card: { backgroundColor: COLORS.white, padding: 18, borderRadius: 16, elevation: 2 },
-  title: { fontSize: 18, fontWeight: '800', color: COLORS.primary, marginBottom: 12 },
-  label: { fontSize: 12, fontWeight: '700', color: '#495057', marginTop: 10, marginBottom: 5 },
+  card: {
+    backgroundColor: COLORS.white,
+    padding: 18,
+    borderRadius: 18,
+    ...SHADOWS.card,
+  },
+  title: {
+    fontFamily: FONTS.bold,
+    fontSize: 20,
+    fontWeight: '900',
+    color: COLORS.primary,
+    marginBottom: 12,
+  },
+  label: {
+    fontFamily: FONTS.bold,
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#334155',
+    marginTop: 10,
+    marginBottom: 5,
+  },
   inputBox: {
     alignItems: 'center',
     borderWidth: 1.5,
     borderColor: COLORS.border,
-    borderRadius: 10,
+    borderRadius: 12,
     paddingHorizontal: 12,
-    height: 46,
-    backgroundColor: '#FAFAFA',
+    minHeight: 48,
+    backgroundColor: '#F8FAFC',
   },
-  input: { flex: 1, fontSize: 14, color: COLORS.textDark },
-  errorText: { color: COLORS.danger, fontSize: 11, fontWeight: '700', marginTop: 3 },
-  vGrid: { gap: 6, marginBottom: 4 },
+  inputBoxValid: { borderColor: COLORS.success, backgroundColor: '#F0FDF4' },
+  inputBoxError: { borderColor: COLORS.danger, backgroundColor: '#FEF2F2' },
+  input: {
+    flex: 1,
+    fontFamily: FONTS.medium,
+    fontSize: 15,
+    fontWeight: '600',
+    color: COLORS.textDark,
+    includeFontPadding: false,
+  },
+  errorText: {
+    fontFamily: FONTS.medium,
+    color: COLORS.danger,
+    fontSize: 11,
+    fontWeight: '700',
+    marginTop: 3,
+  },
+  vGrid: { gap: 8, marginBottom: 4 },
   vBtn: {
     flex: 1,
-    padding: 8,
+    paddingVertical: 10,
     borderWidth: 1.5,
     borderColor: COLORS.border,
-    borderRadius: 10,
-    alignItems: 'center',
-  },
-  vBtnActive: { borderColor: COLORS.primary, backgroundColor: COLORS.primaryLight },
-  vText: { fontSize: 11, color: '#333', marginTop: 2 },
-  vTextActive: { fontSize: 11, fontWeight: 'bold', color: COLORS.primary, marginTop: 2 },
-  btnSubmit: {
-    backgroundColor: COLORS.primary,
-    padding: 14,
     borderRadius: 12,
     alignItems: 'center',
-    marginTop: 18,
+    backgroundColor: '#F8FAFC',
   },
-  btnSubmitText: { color: '#fff', fontWeight: 'bold', fontSize: 14 },
+  vBtnActive: { borderColor: COLORS.primary, backgroundColor: COLORS.primaryLight },
+  vText: { fontFamily: FONTS.medium, fontSize: 11, color: '#475569', marginTop: 4, fontWeight: '700' },
+  vTextActive: {
+    fontFamily: FONTS.bold,
+    fontSize: 12,
+    fontWeight: '900',
+    color: COLORS.primary,
+    marginTop: 4,
+  },
+  photoRow: { justifyContent: 'space-between', marginTop: 6 },
+  photoBtn: {
+    flex: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1.5,
+    borderColor: COLORS.primary,
+    backgroundColor: COLORS.primaryLight,
+    paddingVertical: 10,
+    borderRadius: 10,
+    marginHorizontal: 4,
+  },
+  photoBtnErr: { borderColor: COLORS.danger, backgroundColor: '#FEF2F2' },
+  photoBtnText: {
+    fontFamily: FONTS.bold,
+    fontSize: 13,
+    fontWeight: '800',
+    color: COLORS.primary,
+    marginHorizontal: 6,
+  },
+  previewImg: { width: '100%', height: 150, borderRadius: 12, marginTop: 10 },
+  btnSubmit: {
+    backgroundColor: COLORS.primary,
+    paddingVertical: 15,
+    borderRadius: 12,
+    alignItems: 'center',
+    marginTop: 20,
+    ...SHADOWS.card,
+  },
+  btnSubmitText: {
+    fontFamily: FONTS.bold,
+    color: '#fff',
+    fontWeight: '900',
+    fontSize: 15,
+    letterSpacing: 0.8,
+  },
 });

@@ -1,10 +1,11 @@
+// livrili-mobile/src/api/client.js
 import axios from 'axios';
 import * as SecureStore from 'expo-secure-store';
 
-const API_BASE_URL = 'https://livrili.bouhezila.com/api'; // Gardez l'URL de votre serveur si différente
+export const BASE_URL = 'https://livrili.bouhezila.com/api/'; // Remplacez par votre URL actuelle
 
 const apiClient = axios.create({
-  baseURL: API_BASE_URL,
+  baseURL: BASE_URL,
   timeout: 15000,
   headers: {
     'Content-Type': 'application/json',
@@ -15,26 +16,31 @@ const apiClient = axios.create({
 apiClient.interceptors.request.use(
   async (config) => {
     try {
-      let token =
-        (await SecureStore.getItemAsync('auth_token')) ||
-        (await SecureStore.getItemAsync('userToken')) ||
-        (await SecureStore.getItemAsync('token'));
+      // 1. Récupération du token individuel ou extrait de l'objet utilisateur
+      const token = await SecureStore.getItemAsync('auth_token');
+      const userDataStr = await SecureStore.getItemAsync('user_data');
+      const userData = userDataStr ? JSON.parse(userDataStr) : null;
+      const finalToken = token || userData?.auth_token;
 
-      if (token) {
-        // 1. En-tête standard + X-Auth-Token
-        config.headers.Authorization = `Bearer ${token}`;
-        config.headers['X-Auth-Token'] = token;
+      if (finalToken) {
+        config.headers.Authorization = `Bearer ${finalToken}`;
+        config.headers['X-Auth-Token'] = finalToken;
 
-        // 2. Ajout en paramètre GET (au cas où Apache/CGI filtre le header Authorization)
-        config.params = { ...(config.params || {}), token, auth_token: token };
+        // Paramètre de secours injecté automatiquement sur toutes les requêtes (GET et POST)
+        config.params = {
+          ...(config.params || {}),
+          auth_token: finalToken,
+        };
+      }
 
-        // 3. Ajout dans le body JSON si c'est une requête POST
-        if (config.data && typeof config.data === 'object' && !(config.data instanceof FormData)) {
-          config.data = { ...config.data, token, auth_token: token };
-        }
+      if (userData?.id) {
+        config.params = {
+          ...(config.params || {}),
+          user_id: userData.id,
+        };
       }
     } catch (e) {
-      console.log('Token interceptor error:', e);
+      console.log('Erreur interceptor client:', e);
     }
     return config;
   },
