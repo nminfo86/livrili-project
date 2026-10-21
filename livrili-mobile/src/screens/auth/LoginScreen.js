@@ -17,14 +17,23 @@ import {
 } from "react-native";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
-import { Ionicons, MaterialCommunityIcons } from "@expo/vector-icons";
+import { Ionicons, MaterialCommunityIcons, Fontisto } from "@expo/vector-icons";
 import { AuthContext } from "../../context/AuthContext";
 import { useThemeLang, COLORS } from "../../context/ThemeLanguageContext";
 import apiClient from "../../api/client";
+import {
+  isValidLoginIdentifier,
+  isValidFullName,
+  isValidDzPhone,
+  isValidEmail,
+  isValidPassword,
+  isValidBrand,
+  isValidColor,
+  isValidPlate,
+  isValidPhoto,
+} from "../../utils/validators";
 
-// 👉 Décommentez la ligne ci-dessous dès que vous avez mis votre image dans assets/login-hero.png :
 const HERO_IMAGE = require('../../../assets/login-hero.png');
-// const HERO_IMAGE = null;
 
 const LANGUAGES = [
   { code: "fr", label: "Français", short: "Français" },
@@ -33,7 +42,7 @@ const LANGUAGES = [
 ];
 
 export default function LoginScreen() {
-  const { login, googleLogin } = useContext(AuthContext);
+  const { login } = useContext(AuthContext);
   const { t, lang, isRTL, changeLanguage } = useThemeLang();
 
   const [langDropdownVisible, setLangDropdownVisible] = useState(false);
@@ -48,6 +57,24 @@ export default function LoginScreen() {
   const [loading, setLoading] = useState(false);
   const [submittedAttempt, setSubmittedAttempt] = useState(false);
 
+  // État de suivi "champ quitté" (Blur)
+  const [touched, setTouched] = useState({
+    loginId: false,
+    loginPassword: false,
+    fullName: false,
+    phone: false,
+    email: false,
+    password: false,
+    confirmPassword: false,
+    brand: false,
+    plate: false,
+    color: false,
+  });
+
+  const markTouched = (field) => {
+    setTouched((prev) => ({ ...prev, [field]: true }));
+  };
+
   // GPS & Commune
   const [gpsLoading, setGpsLoading] = useState(false);
   const [userCoords, setUserCoords] = useState({ lat: 36.1528, lon: 5.6902 });
@@ -55,24 +82,9 @@ export default function LoginScreen() {
 
   // Champs spécifiques Livreur
   const [transportModes, setTransportModes] = useState([
-    {
-      id: "moto",
-      title_fr: "Moto",
-      title_ar: "دراجة نارية",
-      icon: "motorbike",
-    },
-    {
-      id: "camionnette",
-      title_fr: "Chana / Harbin",
-      title_ar: "شاحنة صغيرة",
-      icon: "truck-flatbed",
-    },
-    {
-      id: "fourgon",
-      title_fr: "Fourgon",
-      title_ar: "فورغون",
-      icon: "truck-delivery",
-    },
+    { id: "moto", title_fr: "Moto", title_ar: "دراجة نارية", icon: "motorbike" },
+    { id: "camionnette", title_fr: "Chana / Harbin", title_ar: "شاحنة صغيرة", icon: "truck-flatbed" },
+    { id: "fourgon", title_fr: "Fourgon", title_ar: "فورغون", icon: "truck-delivery" },
   ]);
   const [vehicleType, setVehicleType] = useState("moto");
   const [vehicleBrand, setVehicleBrand] = useState("");
@@ -136,32 +148,18 @@ export default function LoginScreen() {
     }
   };
 
-  // --- VALIDATIONS UNITAIRES ---
-  const isValidFullName = (val) => val.trim().length >= 3;
-  const isValidAlgerianPhone = (num) => {
-    const clean = String(num || "").replace(/\s+/g, "");
-    if (
-      /^0[567](\d)\1{7}$/.test(clean) ||
-      clean === "0512345678" ||
-      clean === "0612345678"
-    ) {
-      return false;
-    }
-    return /^(05|06|07)[0-9]{8}$/.test(clean);
-  };
-  const isValidEmail = (val) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(val.trim());
-  const isStrongPassword = (pwd) => {
-    const hasLetter = /[a-zA-Z]/.test(pwd);
-    const hasNumber = /[0-9]/.test(pwd);
-    const hasSpecial = /[^a-zA-Z0-9]/.test(pwd);
-    return pwd.length >= 8 && hasLetter && hasNumber && hasSpecial;
-  };
-  const isValidConfirmPassword = () =>
-    confirmPassword.length > 0 && password === confirmPassword;
-  const isValidBrand = (val) => val.trim().length >= 2;
-  const isValidPlate = (val) => val.trim().length >= 4;
-  const isValidColor = (val) => val.trim().length >= 2;
-  const isValidPhoto = () => Boolean(proofPhotoBase64);
+  // Validations unitaires
+  const loginIdOk = isValidLoginIdentifier(email);
+  const loginPassOk = isValidPassword(password);
+  const nameOk = isValidFullName(fullName);
+  const phoneOk = isValidDzPhone(phone);
+  const emailOk = isValidEmail(email);
+  const passOk = isValidPassword(password);
+  const confirmPassOk = confirmPassword.length > 0 && password === confirmPassword;
+  const brandOk = isValidBrand(vehicleBrand);
+  const plateOk = isValidPlate(plateNumber);
+  const colorOk = isValidColor(vehicleColor);
+  const photoOk = isValidPhoto(proofPhotoBase64);
 
   const pickDriverProofPhoto = async (fromCamera = false) => {
     try {
@@ -171,35 +169,24 @@ export default function LoginScreen() {
       if (permission.status !== "granted") return;
 
       const result = fromCamera
-        ? await ImagePicker.launchCameraAsync({
-            quality: 0.5,
-            base64: true,
-            allowsEditing: true,
-          })
-        : await ImagePicker.launchImageLibraryAsync({
-            quality: 0.5,
-            base64: true,
-            allowsEditing: true,
-          });
+        ? await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true, allowsEditing: true })
+        : await ImagePicker.launchImageLibraryAsync({ quality: 0.5, base64: true, allowsEditing: true });
 
       if (!result.canceled && result.assets && result.assets[0]) {
         setProofPhotoUri(result.assets[0].uri);
-        setProofPhotoBase64(
-          `data:image/jpeg;base64,${result.assets[0].base64}`,
-        );
+        setProofPhotoBase64(`data:image/jpeg;base64,${result.assets[0].base64}`);
       }
     } catch (e) {}
   };
 
   const verifySimOwnershipViaWhatsapp = async () => {
-    if (!isValidAlgerianPhone(phone)) {
+    if (!isValidDzPhone(phone)) {
       setSubmittedAttempt(true);
+      markTouched("phone");
       return;
     }
     setPhoneVerifiedBySim(true);
-    const msg = encodeURIComponent(
-      `Vérification de mon numéro Livrili DZ : ${phone.trim()}`,
-    );
+    const msg = encodeURIComponent(`Vérification de mon numéro Livrili DZ : ${phone.trim()}`);
     Linking.openURL(`https://wa.me/213552791323?text=${msg}`).catch(() => {});
   };
 
@@ -207,31 +194,24 @@ export default function LoginScreen() {
     setSubmittedAttempt(true);
 
     if (!isRegister) {
-      if (!email.trim() || !password.trim()) {
-        return;
-      }
+      if (!loginIdOk || !loginPassOk) return;
       setLoading(true);
       try {
+        const cleanId = email.trim();
         const res = await apiClient.post("auth.php?action=login", {
-          identifier: email.trim(),
-          email: email.trim(),
-          phone: email.trim(),
+          identifier: cleanId,
+          email: cleanId,
+          phone: cleanId,
           password: password,
         });
         const data = res.data;
         if (data && (data.token || data.auth_token || data.success)) {
           await login(data.token || data.auth_token, data.user);
         } else {
-          Alert.alert(
-            "Erreur",
-            data?.error || data?.message || "Identifiants incorrects.",
-          );
+          Alert.alert("Erreur", data?.error || data?.message || "Identifiants incorrects.");
         }
       } catch (err) {
-        const msg =
-          err.response?.data?.error ||
-          err.response?.data?.message ||
-          "Erreur de connexion.";
+        const msg = err.response?.data?.error || err.response?.data?.message || "Erreur de connexion.";
         Alert.alert("Attention", msg);
       } finally {
         setLoading(false);
@@ -239,23 +219,10 @@ export default function LoginScreen() {
       return;
     }
 
-    const baseValid =
-      isValidFullName(fullName) &&
-      isValidAlgerianPhone(phone) &&
-      isValidEmail(email) &&
-      isStrongPassword(password) &&
-      isValidConfirmPassword();
+    const baseValid = nameOk && phoneOk && emailOk && passOk && confirmPassOk;
+    const driverValid = role !== "driver" || (brandOk && plateOk && colorOk && photoOk);
 
-    const driverValid =
-      role !== "driver" ||
-      (isValidBrand(vehicleBrand) &&
-        isValidPlate(plateNumber) &&
-        isValidColor(vehicleColor) &&
-        isValidPhoto());
-
-    if (!baseValid || !driverValid) {
-      return;
-    }
+    if (!baseValid || !driverValid) return;
 
     setLoading(true);
     try {
@@ -278,10 +245,7 @@ export default function LoginScreen() {
 
   const handleVerifyOtpAndRegister = async () => {
     if (otpCode.trim().length !== 6) {
-      Alert.alert(
-        "Code invalide",
-        "Veuillez entrer le code de vérification à 6 chiffres.",
-      );
+      Alert.alert("Code invalide", "Veuillez entrer le code de vérification à 6 chiffres.");
       return;
     }
     setLoading(true);
@@ -318,16 +282,10 @@ export default function LoginScreen() {
         };
         await login(token, userObj);
       } else {
-        Alert.alert(
-          "Erreur OTP",
-          data?.error || data?.message || "Code OTP incorrect.",
-        );
+        Alert.alert("Erreur OTP", data?.error || data?.message || "Code OTP incorrect.");
       }
     } catch (err) {
-      const msg =
-        err.response?.data?.error ||
-        err.response?.data?.message ||
-        "Code OTP invalide.";
+      const msg = err.response?.data?.error || err.response?.data?.message || "Code OTP invalide.";
       Alert.alert("Erreur", msg);
     } finally {
       setLoading(false);
@@ -338,33 +296,25 @@ export default function LoginScreen() {
   const textAlignDir = isRTL ? "right" : "left";
   const currentLangObj = LANGUAGES.find((l) => l.code === lang) || LANGUAGES[0];
 
-  const getBoxStyle = (isValid) => {
-    if (isValid) {
+  // Le style ne change qu'après avoir quitté le champ (isFieldTouched) ou après validation globale
+  const getBoxStyle = (isValid, isFieldTouched) => {
+    const shouldShow = isFieldTouched || submittedAttempt;
+    if (shouldShow && isValid) {
       return [
         styles.softInputBox,
-        {
-          flexDirection: rowDir,
-          borderColor: COLORS.primary,
-          borderWidth: 1.5,
-        },
+        { flexDirection: rowDir, borderColor: COLORS.primary, borderWidth: 1.5 },
       ];
     }
-    if (submittedAttempt && !isValid) {
+    if (shouldShow && !isValid) {
       return [
         styles.softInputBox,
-        {
-          flexDirection: rowDir,
-          borderColor: COLORS.danger,
-          backgroundColor: COLORS.dangerLight,
-          borderWidth: 1.5,
-        },
+        { flexDirection: rowDir, borderColor: COLORS.danger, backgroundColor: COLORS.dangerLight, borderWidth: 1.5 },
       ];
     }
     return [styles.softInputBox, { flexDirection: rowDir }];
   };
 
   const handleGoogleSignIn = async () => {
-    // Si vous utilisez expo-auth-session / Google Sign-In, passez le payload ici :
     Alert.alert("Google", "Connexion rapide avec votre compte Google...");
   };
 
@@ -373,11 +323,8 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        keyboardShouldPersistTaps="handled"
-      >
-        {/* 1. BOUTON DROPDOWN LANGUE EN HAUT À DROITE (Style Maquette) */}
+      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+        {/* DROPDOWN LANGUE */}
         <View style={styles.topBar}>
           <TouchableOpacity
             style={styles.langDropdownBtn}
@@ -386,96 +333,61 @@ export default function LoginScreen() {
           >
             <Text style={styles.langLabelPrefix}>Lang: </Text>
             <Text style={styles.langLabelValue}>{currentLangObj.short}</Text>
-            <Ionicons
-              name="chevron-down"
-              size={16}
-              color="#0F172A"
-              style={{ marginLeft: 4 }}
-            />
+            <Ionicons name="chevron-down" size={16} color="#0F172A" style={{ marginLeft: 4 }} />
           </TouchableOpacity>
         </View>
 
-        {/* 2. ILLUSTRATION HERO + TITRE */}
+        {/* ILLUSTRATION HERO */}
         <View style={styles.heroContainer}>
           {HERO_IMAGE ? (
-            <Image
-              source={HERO_IMAGE}
-              style={styles.heroImage}
-              resizeMode="contain"
-            />
+            <Image source={HERO_IMAGE} style={styles.heroImage} resizeMode="contain" />
           ) : (
             <View style={styles.heroFallback}>
-              <MaterialCommunityIcons
-                name="truck-fast-outline"
-                size={96}
-                color={COLORS.primary}
-              />
+              <Fontisto name="motorcycle" size={80} color={COLORS.primary} />
             </View>
           )}
-          {/* <Text style={styles.brandTitle}>LIVRILI DELIVERY</Text> */}
-          {/* <Text style={styles.brandSubtitle}>{t("appSubtitle")}</Text> */}
         </View>
 
-        {/* 3. FORMULAIRE */}
+        {/* FORMULAIRE */}
         <View style={styles.formContainer}>
           {!isRegister ? (
             <>
-              {/* Indicatifs Pays style maquette */}
-              {/* <View
-                style={[
-                  styles.softInputBox,
-                  { flexDirection: rowDir, marginBottom: 14 },
-                ]}
-              >
-                <Text style={[styles.countryText, { textAlign: textAlignDir }]}>
-                  🇩🇿 Algérie (+213)
-                </Text>
-              </View> */}
-
               {/* Email ou Téléphone */}
-              <View style={getBoxStyle(email.trim().length >= 4)}>
+              <View style={getBoxStyle(loginIdOk, touched.loginId)}>
                 <TextInput
                   style={[styles.softInput, { textAlign: textAlignDir }]}
-                  placeholder={t("emailOrPhoneLabel")}
+                  placeholder={t("emailOrPhoneLabel") || "Email ou Téléphone"}
                   placeholderTextColor="#64748B"
                   autoCapitalize="none"
                   keyboardType="email-address"
                   value={email}
                   onChangeText={setEmail}
+                  onBlur={() => markTouched("loginId")}
                 />
-                {email.trim().length >= 4 ? (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={20}
-                    color={COLORS.primary}
-                  />
-                ) : submittedAttempt ? (
-                  <Ionicons
-                    name="alert-circle"
-                    size={20}
-                    color={COLORS.danger}
-                  />
+                {(touched.loginId || submittedAttempt) && loginIdOk ? (
+                  <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+                ) : (touched.loginId || submittedAttempt) && !loginIdOk ? (
+                  <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
                 ) : null}
               </View>
-              {submittedAttempt && email.trim().length < 4 && (
+              {(touched.loginId || submittedAttempt) && !loginIdOk && (
                 <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
-                  {t("errIdentifier")}
+                  {t("errIdentifier") || "Format invalide (ex: 0550123456 ou nom@mail.com)."}
                 </Text>
               )}
 
               {/* Mot de passe */}
-              <View
-                style={[getBoxStyle(password.length >= 4), { marginTop: 14 }]}
-              >
+              <View style={[getBoxStyle(loginPassOk, touched.loginPassword), { marginTop: 14 }]}>
                 <TextInput
                   style={[styles.softInput, { textAlign: textAlignDir }]}
-                  placeholder={t("passwordLabel")}
+                  placeholder={t("passwordLabel") || "Mot de passe"}
                   placeholderTextColor="#64748B"
                   secureTextEntry={!showPassword}
                   value={password}
                   onChangeText={setPassword}
+                  onBlur={() => markTouched("loginPassword")}
                 />
-                {password.length >= 4 && (
+                {(touched.loginPassword || submittedAttempt) && loginPassOk && (
                   <Ionicons
                     name="checkmark-circle"
                     size={20}
@@ -483,9 +395,7 @@ export default function LoginScreen() {
                     style={{ marginHorizontal: 6 }}
                   />
                 )}
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                >
+                <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
                   <Ionicons
                     name={showPassword ? "eye-off-outline" : "eye-outline"}
                     size={20}
@@ -493,17 +403,17 @@ export default function LoginScreen() {
                   />
                 </TouchableOpacity>
               </View>
-              {submittedAttempt && password.length < 4 && (
+              {(touched.loginPassword || submittedAttempt) && !loginPassOk && (
                 <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
-                  {t("errLoginPassword")}
+                  {t("errLoginPassword") || "Mot de passe requis (min 6 caractères)."}
                 </Text>
               )}
             </>
           ) : (
-            /* --- FORMULAIRE D'INSCRIPTION COMPLET --- */
+            /* --- INSCRIPTION --- */
             <>
               <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                {t("accountType")}
+                {t("accountType") || "Type de compte"}
               </Text>
               <View style={[styles.roleRow, { flexDirection: rowDir }]}>
                 <TouchableOpacity
@@ -519,13 +429,8 @@ export default function LoginScreen() {
                     size={20}
                     color={role === "customer" ? COLORS.primary : "#64748B"}
                   />
-                  <Text
-                    style={[
-                      styles.roleChipText,
-                      role === "customer" && styles.roleChipTextActive,
-                    ]}
-                  >
-                    {t("roleCustomer")}
+                  <Text style={[styles.roleChipText, role === "customer" && styles.roleChipTextActive]}>
+                    {t("roleCustomer") || "Client"}
                   </Text>
                 </TouchableOpacity>
                 <TouchableOpacity
@@ -536,25 +441,20 @@ export default function LoginScreen() {
                   ]}
                   onPress={() => setRole("driver")}
                 >
-                  <MaterialCommunityIcons
-                    name="motorbike"
-                    size={22}
+                  <Fontisto
+                    name="motorcycle"
+                    size={18}
                     color={role === "driver" ? COLORS.primary : "#64748B"}
                   />
-                  <Text
-                    style={[
-                      styles.roleChipText,
-                      role === "driver" && styles.roleChipTextActive,
-                    ]}
-                  >
-                    {t("roleDriver")}
+                  <Text style={[styles.roleChipText, role === "driver" && styles.roleChipTextActive]}>
+                    {t("roleDriver") || "Livreur"}
                   </Text>
                 </TouchableOpacity>
               </View>
 
-              {/* COMMUNE (Sans texte technique) */}
+              {/* COMMUNE */}
               <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                {t("communeAutoGps")}
+                {t("communeAutoGps") || "Commune (GPS)"}
               </Text>
               <View
                 style={[
@@ -571,166 +471,131 @@ export default function LoginScreen() {
                 <Text
                   style={[
                     styles.softInput,
-                    {
-                      textAlign: textAlignDir,
-                      fontWeight: "800",
-                      color: COLORS.primary,
-                    },
+                    { textAlign: textAlignDir, fontWeight: "800", color: COLORS.primary },
                   ]}
                 >
-                  {gpsLoading ? t("detectingGps") : communeName}
+                  {gpsLoading ? (t("detectingGps") || "Recherche...") : communeName}
                 </Text>
                 <TouchableOpacity onPress={detectUserCommuneAutomatic}>
                   {gpsLoading ? (
                     <ActivityIndicator size="small" color={COLORS.primary} />
                   ) : (
-                    <Ionicons
-                      name="checkmark-circle"
-                      size={20}
-                      color={COLORS.primary}
-                    />
+                    <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
                   )}
                 </TouchableOpacity>
               </View>
 
               {/* NOM COMPLET */}
               <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                {t("fullName")}
+                {t("fullName") || "Nom complet"}
               </Text>
-              <View style={getBoxStyle(isValidFullName(fullName))}>
+              <View style={getBoxStyle(nameOk, touched.fullName)}>
                 <TextInput
                   style={[styles.softInput, { textAlign: textAlignDir }]}
-                  placeholder={t("fullNamePlaceholder")}
+                  placeholder={t("fullNamePlaceholder") || "Ex: Nassim Bouhezila"}
                   placeholderTextColor="#64748B"
                   value={fullName}
                   onChangeText={setFullName}
+                  onBlur={() => markTouched("fullName")}
                 />
-                {isValidFullName(fullName) ? (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={20}
-                    color={COLORS.primary}
-                  />
-                ) : submittedAttempt ? (
-                  <Ionicons
-                    name="alert-circle"
-                    size={20}
-                    color={COLORS.danger}
-                  />
+                {(touched.fullName || submittedAttempt) && nameOk ? (
+                  <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+                ) : (touched.fullName || submittedAttempt) && !nameOk ? (
+                  <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
                 ) : null}
               </View>
-              {submittedAttempt && !isValidFullName(fullName) && (
+              {(touched.fullName || submittedAttempt) && !nameOk && (
                 <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
-                  {t("errFullName")}
+                  {t("errFullName") || "Nom complet invalide (lettres uniquement, min 3 caractères)."}
                 </Text>
               )}
 
-              {/* TÉLÉPHONE ALGÉRIEN */}
+              {/* TÉLÉPHONE */}
               <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                {t("phoneLabel")}
+                {t("phoneLabel") || "Téléphone"}
               </Text>
-              <View style={getBoxStyle(isValidAlgerianPhone(phone))}>
+              <View style={getBoxStyle(phoneOk, touched.phone)}>
                 <TextInput
                   style={[styles.softInput, { textAlign: textAlignDir }]}
-                  placeholder={t("phonePlaceholder")}
+                  placeholder={t("phonePlaceholder") || "05 / 06 / 07 XX XX XX XX"}
                   placeholderTextColor="#64748B"
                   keyboardType="phone-pad"
                   maxLength={10}
                   value={phone}
                   onChangeText={(txt) => setPhone(txt.replace(/[^0-9]/g, ""))}
+                  onBlur={() => markTouched("phone")}
                 />
-                {isValidAlgerianPhone(phone) ? (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={20}
-                    color={COLORS.primary}
-                  />
-                ) : submittedAttempt ? (
-                  <Ionicons
-                    name="alert-circle"
-                    size={20}
-                    color={COLORS.danger}
-                  />
+                {(touched.phone || submittedAttempt) && phoneOk ? (
+                  <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+                ) : (touched.phone || submittedAttempt) && !phoneOk ? (
+                  <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
                 ) : null}
               </View>
-              {submittedAttempt && !isValidAlgerianPhone(phone) && (
+              {(touched.phone || submittedAttempt) && !phoneOk && (
                 <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
-                  {t("errPhone")}
+                  {t("errPhone") || "Numéro invalide : 10 chiffres (05, 06 ou 07)."}
                 </Text>
               )}
 
               <TouchableOpacity
                 style={[
                   styles.simVerifyBtn,
-                  {
-                    flexDirection: rowDir,
-                    alignSelf: isRTL ? "flex-end" : "flex-start",
-                  },
+                  { flexDirection: rowDir, alignSelf: isRTL ? "flex-end" : "flex-start" },
                 ]}
                 onPress={verifySimOwnershipViaWhatsapp}
               >
                 <Ionicons
-                  name={
-                    phoneVerifiedBySim
-                      ? "checkmark-done-circle"
-                      : "logo-whatsapp"
-                  }
+                  name={phoneVerifiedBySim ? "checkmark-done-circle" : "logo-whatsapp"}
                   size={17}
                   color={COLORS.primary}
                 />
                 <Text style={styles.simVerifyText}>
-                  {phoneVerifiedBySim ? t("simVerified") : t("simVerifyBtn")}
+                  {phoneVerifiedBySim ? (t("simVerified") || "Numéro vérifié") : (t("simVerifyBtn") || "Vérifier via WhatsApp")}
                 </Text>
               </TouchableOpacity>
 
               {/* EMAIL */}
               <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                {t("emailLabel")}
+                {t("emailLabel") || "Email"}
               </Text>
-              <View style={getBoxStyle(isValidEmail(email))}>
+              <View style={getBoxStyle(emailOk, touched.email)}>
                 <TextInput
                   style={[styles.softInput, { textAlign: textAlignDir }]}
-                  placeholder={t("emailPlaceholder")}
+                  placeholder={t("emailPlaceholder") || "nom@domaine.com"}
                   placeholderTextColor="#64748B"
                   autoCapitalize="none"
                   keyboardType="email-address"
                   value={email}
                   onChangeText={setEmail}
+                  onBlur={() => markTouched("email")}
                 />
-                {isValidEmail(email) ? (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={20}
-                    color={COLORS.primary}
-                  />
-                ) : submittedAttempt ? (
-                  <Ionicons
-                    name="alert-circle"
-                    size={20}
-                    color={COLORS.danger}
-                  />
+                {(touched.email || submittedAttempt) && emailOk ? (
+                  <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+                ) : (touched.email || submittedAttempt) && !emailOk ? (
+                  <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
                 ) : null}
               </View>
-              {submittedAttempt && !isValidEmail(email) && (
+              {(touched.email || submittedAttempt) && !emailOk && (
                 <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
-                  {t("errEmail")}
+                  {t("errEmail") || "Adresse email invalide."}
                 </Text>
               )}
 
               {/* MOT DE PASSE */}
               <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                {t("passwordLabel")}
+                {t("passwordLabel") || "Mot de passe"}
               </Text>
-              <View style={getBoxStyle(isStrongPassword(password))}>
+              <View style={getBoxStyle(passOk, touched.password)}>
                 <TextInput
                   style={[styles.softInput, { textAlign: textAlignDir }]}
-                  placeholder={t("passwordPlaceholder")}
+                  placeholder={t("passwordPlaceholder") || "Minimum 6 caractères"}
                   placeholderTextColor="#64748B"
                   secureTextEntry={!showPassword}
                   value={password}
                   onChangeText={setPassword}
+                  onBlur={() => markTouched("password")}
                 />
-                {isStrongPassword(password) && (
+                {(touched.password || submittedAttempt) && passOk && (
                   <Ionicons
                     name="checkmark-circle"
                     size={20}
@@ -738,9 +603,7 @@ export default function LoginScreen() {
                     style={{ marginHorizontal: 4 }}
                   />
                 )}
-                <TouchableOpacity
-                  onPress={() => setShowPassword(!showPassword)}
-                >
+                <TouchableOpacity onPress={() => setShowPassword(!showPassword)}>
                   <Ionicons
                     name={showPassword ? "eye-off-outline" : "eye-outline"}
                     size={20}
@@ -748,89 +611,72 @@ export default function LoginScreen() {
                   />
                 </TouchableOpacity>
               </View>
-              {submittedAttempt && !isStrongPassword(password) && (
+              {(touched.password || submittedAttempt) && !passOk && (
                 <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
-                  {t("errPassword")}
+                  {t("errPassword") || "Le mot de passe doit comporter au moins 6 caractères."}
                 </Text>
               )}
 
               {/* CONFIRMATION MOT DE PASSE */}
               <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                {t("confirmPasswordLabel")}
+                {t("confirmPasswordLabel") || "Confirmer le mot de passe"}
               </Text>
-              <View style={getBoxStyle(isValidConfirmPassword())}>
+              <View style={getBoxStyle(confirmPassOk, touched.confirmPassword)}>
                 <TextInput
                   style={[styles.softInput, { textAlign: textAlignDir }]}
-                  placeholder={t("confirmPasswordPlaceholder")}
+                  placeholder={t("confirmPasswordPlaceholder") || "Répéter le mot de passe"}
                   placeholderTextColor="#64748B"
                   secureTextEntry={!showPassword}
                   value={confirmPassword}
                   onChangeText={setConfirmPassword}
+                  onBlur={() => markTouched("confirmPassword")}
                 />
-                {isValidConfirmPassword() ? (
-                  <Ionicons
-                    name="checkmark-circle"
-                    size={20}
-                    color={COLORS.primary}
-                  />
-                ) : submittedAttempt ? (
-                  <Ionicons
-                    name="alert-circle"
-                    size={20}
-                    color={COLORS.danger}
-                  />
+                {(touched.confirmPassword || submittedAttempt) && confirmPassOk ? (
+                  <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+                ) : (touched.confirmPassword || submittedAttempt) && !confirmPassOk ? (
+                  <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
                 ) : null}
               </View>
-              {submittedAttempt && !isValidConfirmPassword() && (
+              {(touched.confirmPassword || submittedAttempt) && !confirmPassOk && (
                 <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
-                  {t("errConfirmPassword")}
+                  {t("errConfirmPassword") || "Les mots de passe ne correspondent pas."}
                 </Text>
               )}
 
-              {/* SECTION SPÉCIFIQUE LIVREUR */}
+              {/* SECTION LIVREUR */}
               {role === "driver" && (
                 <View style={styles.driverSection}>
-                  <Text
-                    style={[
-                      styles.driverSectionTitle,
-                      { textAlign: textAlignDir },
-                    ]}
-                  >
-                    {t("driverSectionTitle")}
+                  <Text style={[styles.driverSectionTitle, { textAlign: textAlignDir }]}>
+                    {t("driverSectionTitle") || "Informations Véhicule Livreur"}
                   </Text>
 
                   <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                    {t("transportModeLabel")}
+                    {t("transportModeLabel") || "Type de véhicule"}
                   </Text>
-                  <View
-                    style={[styles.vehicleTypeRow, { flexDirection: rowDir }]}
-                  >
+                  <View style={[styles.vehicleTypeRow, { flexDirection: rowDir }]}>
                     {transportModes.map((v) => {
-                      const vLabel =
-                        isRTL && v.title_ar ? v.title_ar : v.title_fr;
+                      const vLabel = isRTL && v.title_ar ? v.title_ar : v.title_fr;
+                      const active = vehicleType === v.id;
                       return (
                         <TouchableOpacity
                           key={v.id}
-                          style={[
-                            styles.vehicleTypeBtn,
-                            vehicleType === v.id && styles.vehicleTypeBtnActive,
-                          ]}
+                          style={[styles.vehicleTypeBtn, active && styles.vehicleTypeBtnActive]}
                           onPress={() => setVehicleType(v.id)}
                         >
-                          <MaterialCommunityIcons
-                            name={v.icon || "motorbike"}
-                            size={22}
-                            color={
-                              vehicleType === v.id ? COLORS.primary : "#64748B"
-                            }
-                          />
-                          <Text
-                            style={[
-                              styles.vehicleTypeText,
-                              vehicleType === v.id &&
-                                styles.vehicleTypeTextActive,
-                            ]}
-                          >
+                          {v.id === "moto" ? (
+                            <Fontisto
+                              name="motorcycle"
+                              size={20}
+                              color={active ? COLORS.primary : "#64748B"}
+                            />
+                          ) : (
+                            <MaterialCommunityIcons
+                              name={v.icon || "truck-flatbed"}
+                              size={22}
+                              color={active ? COLORS.primary : "#64748B"}
+                            />
+                          )}
+                          <Text style={[styles.vehicleTypeText, active && styles.vehicleTypeTextActive]}>
                             {vLabel}
                           </Text>
                         </TouchableOpacity>
@@ -838,128 +684,87 @@ export default function LoginScreen() {
                     })}
                   </View>
 
+                  {/* Marque */}
                   <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                    {t("vehicleBrandLabel")}
+                    {t("vehicleBrandLabel") || "Marque et modèle"}
                   </Text>
-                  <View style={getBoxStyle(isValidBrand(vehicleBrand))}>
+                  <View style={getBoxStyle(brandOk, touched.brand)}>
                     <TextInput
                       style={[styles.softInput, { textAlign: textAlignDir }]}
-                      placeholder={t("vehicleBrandPlaceholder")}
+                      placeholder={t("vehicleBrandPlaceholder") || "Ex: SYM, DFSK..."}
                       placeholderTextColor="#64748B"
                       value={vehicleBrand}
                       onChangeText={setVehicleBrand}
+                      onBlur={() => markTouched("brand")}
                     />
-                    {isValidBrand(vehicleBrand) ? (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={20}
-                        color={COLORS.primary}
-                      />
-                    ) : submittedAttempt ? (
-                      <Ionicons
-                        name="alert-circle"
-                        size={20}
-                        color={COLORS.danger}
-                      />
+                    {(touched.brand || submittedAttempt) && brandOk ? (
+                      <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+                    ) : (touched.brand || submittedAttempt) && !brandOk ? (
+                      <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
                     ) : null}
                   </View>
-                  {submittedAttempt && !isValidBrand(vehicleBrand) && (
-                    <Text
-                      style={[styles.errorText, { textAlign: textAlignDir }]}
-                    >
-                      {t("errBrand")}
+                  {(touched.brand || submittedAttempt) && !brandOk && (
+                    <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                      {t("errBrand") || "Indiquez la marque réelle."}
                     </Text>
                   )}
 
-                  <View
-                    style={{
-                      flexDirection: rowDir,
-                      justifyContent: "space-between",
-                    }}
-                  >
+                  {/* Matricule & Couleur */}
+                  <View style={{ flexDirection: rowDir, justifyContent: "space-between" }}>
                     <View style={{ flex: 1, marginHorizontal: 3 }}>
                       <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                        {t("plateNumberLabel")}
+                        {t("plateNumberLabel") || "Matricule"}
                       </Text>
-                      <View style={getBoxStyle(isValidPlate(plateNumber))}>
+                      <View style={getBoxStyle(plateOk, touched.plate)}>
                         <TextInput
-                          style={[
-                            styles.softInput,
-                            { textAlign: textAlignDir },
-                          ]}
-                          placeholder={t("plateNumberPlaceholder")}
+                          style={[styles.softInput, { textAlign: textAlignDir }]}
+                          placeholder={t("plateNumberPlaceholder") || "Ex: 12345-122-19"}
                           placeholderTextColor="#64748B"
                           value={plateNumber}
                           onChangeText={setPlateNumber}
+                          onBlur={() => markTouched("plate")}
                         />
-                        {isValidPlate(plateNumber) ? (
-                          <Ionicons
-                            name="checkmark-circle"
-                            size={19}
-                            color={COLORS.primary}
-                          />
-                        ) : submittedAttempt ? (
-                          <Ionicons
-                            name="alert-circle"
-                            size={19}
-                            color={COLORS.danger}
-                          />
+                        {(touched.plate || submittedAttempt) && plateOk ? (
+                          <Ionicons name="checkmark-circle" size={19} color={COLORS.primary} />
+                        ) : (touched.plate || submittedAttempt) && !plateOk ? (
+                          <Ionicons name="alert-circle" size={19} color={COLORS.danger} />
                         ) : null}
                       </View>
-                      {submittedAttempt && !isValidPlate(plateNumber) && (
-                        <Text
-                          style={[
-                            styles.errorText,
-                            { textAlign: textAlignDir },
-                          ]}
-                        >
-                          {t("errPlate")}
+                      {(touched.plate || submittedAttempt) && !plateOk && (
+                        <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                          {t("errPlate") || "Matricule invalide."}
                         </Text>
                       )}
                     </View>
 
                     <View style={{ flex: 1, marginHorizontal: 3 }}>
                       <Text style={[styles.label, { textAlign: textAlignDir }]}>
-                        {t("vehicleColorLabel")}
+                        {t("vehicleColorLabel") || "Couleur"}
                       </Text>
-                      <View style={getBoxStyle(isValidColor(vehicleColor))}>
+                      <View style={getBoxStyle(colorOk, touched.color)}>
                         <TextInput
-                          style={[
-                            styles.softInput,
-                            { textAlign: textAlignDir },
-                          ]}
-                          placeholder={t("vehicleColorPlaceholder")}
+                          style={[styles.softInput, { textAlign: textAlignDir }]}
+                          placeholder={t("vehicleColorPlaceholder") || "Ex: Noir, Blanc..."}
                           placeholderTextColor="#64748B"
                           value={vehicleColor}
                           onChangeText={setVehicleColor}
+                          onBlur={() => markTouched("color")}
                         />
-                        {isValidColor(vehicleColor) ? (
-                          <Ionicons
-                            name="checkmark-circle"
-                            size={19}
-                            color={COLORS.primary}
-                          />
-                        ) : submittedAttempt ? (
-                          <Ionicons
-                            name="alert-circle"
-                            size={19}
-                            color={COLORS.danger}
-                          />
+                        {(touched.color || submittedAttempt) && colorOk ? (
+                          <Ionicons name="checkmark-circle" size={19} color={COLORS.primary} />
+                        ) : (touched.color || submittedAttempt) && !colorOk ? (
+                          <Ionicons name="alert-circle" size={19} color={COLORS.danger} />
                         ) : null}
                       </View>
-                      {submittedAttempt && !isValidColor(vehicleColor) && (
-                        <Text
-                          style={[
-                            styles.errorText,
-                            { textAlign: textAlignDir },
-                          ]}
-                        >
-                          {t("errColor")}
+                      {(touched.color || submittedAttempt) && !colorOk && (
+                        <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                          {t("errColor") || "Couleur invalide."}
                         </Text>
                       )}
                     </View>
                   </View>
 
+                  {/* Photo */}
                   <View
                     style={{
                       flexDirection: rowDir,
@@ -968,59 +773,37 @@ export default function LoginScreen() {
                       marginTop: 10,
                     }}
                   >
-                    <Text
-                      style={[
-                        styles.label,
-                        { textAlign: textAlignDir, marginTop: 0 },
-                      ]}
-                    >
-                      {t("proofPhotoLabel")}
+                    <Text style={[styles.label, { textAlign: textAlignDir, marginTop: 0 }]}>
+                      {t("proofPhotoLabel") || "Photo du véhicule *"}
                     </Text>
-                    {isValidPhoto() ? (
-                      <Ionicons
-                        name="checkmark-circle"
-                        size={20}
-                        color={COLORS.primary}
-                      />
-                    ) : submittedAttempt ? (
-                      <Ionicons
-                        name="alert-circle"
-                        size={20}
-                        color={COLORS.danger}
-                      />
+                    {photoOk ? (
+                      <Ionicons name="checkmark-circle" size={20} color={COLORS.primary} />
+                    ) : submittedAttempt && !photoOk ? (
+                      <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
                     ) : null}
                   </View>
 
-                  <View
-                    style={[styles.photoButtonsRow, { flexDirection: rowDir }]}
-                  >
+                  <View style={[styles.photoButtonsRow, { flexDirection: rowDir }]}>
                     <TouchableOpacity
                       style={[
                         styles.photoBtn,
                         { flexDirection: rowDir },
-                        submittedAttempt &&
-                          !isValidPhoto() &&
-                          styles.photoBtnError,
+                        submittedAttempt && !photoOk && styles.photoBtnError,
                       ]}
                       onPress={() => pickDriverProofPhoto(true)}
                     >
                       <Ionicons
                         name="camera-outline"
                         size={20}
-                        color={
-                          submittedAttempt && !isValidPhoto()
-                            ? COLORS.danger
-                            : COLORS.primary
-                        }
+                        color={submittedAttempt && !photoOk ? COLORS.danger : COLORS.primary}
                       />
                       <Text
                         style={[
                           styles.photoBtnText,
-                          submittedAttempt &&
-                            !isValidPhoto() && { color: COLORS.danger },
+                          submittedAttempt && !photoOk && { color: COLORS.danger },
                         ]}
                       >
-                        {t("takePhotoBtn")}
+                        {t("takePhotoBtn") || "Caméra"}
                       </Text>
                     </TouchableOpacity>
 
@@ -1028,48 +811,36 @@ export default function LoginScreen() {
                       style={[
                         styles.photoBtn,
                         { flexDirection: rowDir },
-                        submittedAttempt &&
-                          !isValidPhoto() &&
-                          styles.photoBtnError,
+                        submittedAttempt && !photoOk && styles.photoBtnError,
                       ]}
                       onPress={() => pickDriverProofPhoto(false)}
                     >
                       <Ionicons
                         name="images-outline"
                         size={20}
-                        color={
-                          submittedAttempt && !isValidPhoto()
-                            ? COLORS.danger
-                            : COLORS.primary
-                        }
+                        color={submittedAttempt && !photoOk ? COLORS.danger : COLORS.primary}
                       />
                       <Text
                         style={[
                           styles.photoBtnText,
-                          submittedAttempt &&
-                            !isValidPhoto() && { color: COLORS.danger },
+                          submittedAttempt && !photoOk && { color: COLORS.danger },
                         ]}
                       >
-                        {t("galleryBtn")}
+                        {t("galleryBtn") || "Galerie"}
                       </Text>
                     </TouchableOpacity>
                   </View>
-                  {submittedAttempt && !isValidPhoto() && (
-                    <Text
-                      style={[styles.errorText, { textAlign: textAlignDir }]}
-                    >
-                      {t("errPhoto")}
+                  {submittedAttempt && !photoOk && (
+                    <Text style={[styles.errorText, { textAlign: textAlignDir }]}>
+                      {t("errPhoto") || "La photo du véhicule est obligatoire."}
                     </Text>
                   )}
 
                   {proofPhotoUri && (
                     <View style={styles.previewBox}>
-                      <Image
-                        source={{ uri: proofPhotoUri }}
-                        style={styles.previewImage}
-                      />
+                      <Image source={{ uri: proofPhotoUri }} style={styles.previewImage} />
                       <Text style={styles.previewSuccess}>
-                        {t("photoAddedSuccess")}
+                        {t("photoAddedSuccess") || "Photo ajoutée avec succès"}
                       </Text>
                     </View>
                   )}
@@ -1079,24 +850,22 @@ export default function LoginScreen() {
           )}
 
           {/* BOUTON PRINCIPAL */}
-          <TouchableOpacity
-            style={styles.submitBtn}
-            onPress={handleSubmit}
-            disabled={loading}
-          >
+          <TouchableOpacity style={styles.submitBtn} onPress={handleSubmit} disabled={loading}>
             {loading ? (
               <ActivityIndicator color="#FFF" />
             ) : (
               <Text style={styles.submitBtnText}>
-                {isRegister ? t("submitRegisterBtn") : t("submitLoginBtn")}
+                {isRegister
+                  ? (t("submitRegisterBtn") || "S'INSCRIRE")
+                  : (t("submitLoginBtn") || "SE CONNECTER")}
               </Text>
             )}
           </TouchableOpacity>
 
-          {/* SÉPARATEUR "OU SE CONNECTER AVEC" + LOGO GOOGLE CENTRÉ UNIQUEMENT */}
+          {/* SÉPARATEUR & GOOGLE */}
           <View style={styles.orDividerRow}>
             <View style={styles.orLine} />
-            <Text style={styles.orText}>{t("orConnectWith")}</Text>
+            <Text style={styles.orText}>{t("orConnectWith") || "OU SE CONNECTER AVEC"}</Text>
             <View style={styles.orLine} />
           </View>
 
@@ -1114,7 +883,7 @@ export default function LoginScreen() {
             </TouchableOpacity>
           </View>
 
-          {/* LIENS EN BAS (Register User? | Privacy Policy) */}
+          {/* LIENS DU BAS */}
           <View style={[styles.bottomLinksRow, { flexDirection: rowDir }]}>
             <TouchableOpacity
               onPress={() => {
@@ -1123,22 +892,22 @@ export default function LoginScreen() {
               }}
             >
               <Text style={styles.bottomLinkText}>
-                {isRegister ? t("loginTab") : `${t("registerTab")} ?`}
+                {isRegister
+                  ? (t("loginTab") || "Déjà un compte ? Se connecter")
+                  : `${t("registerTab") || "Créer un compte"} ?`}
               </Text>
             </TouchableOpacity>
 
             <TouchableOpacity
-              onPress={() =>
-                Linking.openURL("https://livrili.bouhezila.com").catch(() => {})
-              }
+              onPress={() => Linking.openURL("https://livrili.bouhezila.com").catch(() => {})}
             >
-              <Text style={styles.bottomLinkText}>{t("privacyPolicy")}</Text>
+              <Text style={styles.bottomLinkText}>{t("privacyPolicy") || "Confidentialité"}</Text>
             </TouchableOpacity>
           </View>
         </View>
       </ScrollView>
 
-      {/* MODAL DROPDOWN SÉLECTEUR DE LANGUE */}
+      {/* MODAL LANGUES */}
       <Modal visible={langDropdownVisible} transparent animationType="fade">
         <TouchableOpacity
           style={styles.dropdownOverlay}
@@ -1151,30 +920,16 @@ export default function LoginScreen() {
               return (
                 <TouchableOpacity
                   key={item.code}
-                  style={[
-                    styles.dropdownItem,
-                    selected && styles.dropdownItemActive,
-                  ]}
+                  style={[styles.dropdownItem, selected && styles.dropdownItemActive]}
                   onPress={() => {
                     changeLanguage(item.code);
                     setLangDropdownVisible(false);
                   }}
                 >
-                  <Text
-                    style={[
-                      styles.dropdownItemText,
-                      selected && styles.dropdownItemTextActive,
-                    ]}
-                  >
+                  <Text style={[styles.dropdownItemText, selected && styles.dropdownItemTextActive]}>
                     {item.label}
                   </Text>
-                  {selected && (
-                    <Ionicons
-                      name="checkmark"
-                      size={18}
-                      color={COLORS.primary}
-                    />
-                  )}
+                  {selected && <Ionicons name="checkmark" size={18} color={COLORS.primary} />}
                 </TouchableOpacity>
               );
             })}
@@ -1182,14 +937,12 @@ export default function LoginScreen() {
         </TouchableOpacity>
       </Modal>
 
-      {/* MODAL OTP INSCRIPTION */}
+      {/* MODAL OTP */}
       <Modal visible={otpModalVisible} transparent animationType="slide">
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <View style={[styles.modalHeader, { flexDirection: rowDir }]}>
-              <Text style={styles.modalTitle}>
-                Vérification 2FA (6 chiffres)
-              </Text>
+              <Text style={styles.modalTitle}>Vérification 2FA (6 chiffres)</Text>
               <TouchableOpacity onPress={() => setOtpModalVisible(false)}>
                 <Ionicons name="close" size={24} color="#0F172A" />
               </TouchableOpacity>
@@ -1198,10 +951,7 @@ export default function LoginScreen() {
               {phone} / {email}
             </Text>
             {devOtpHint ? (
-              <TouchableOpacity
-                style={styles.devOtpBanner}
-                onPress={() => setOtpCode(devOtpHint)}
-              >
+              <TouchableOpacity style={styles.devOtpBanner} onPress={() => setOtpCode(devOtpHint)}>
                 <Text style={styles.devOtpText}>OTP : {devOtpHint}</Text>
               </TouchableOpacity>
             ) : null}
@@ -1221,7 +971,7 @@ export default function LoginScreen() {
               {loading ? (
                 <ActivityIndicator color="#FFF" />
               ) : (
-                <Text style={styles.submitBtnText}>{t("validateBtn")}</Text>
+                <Text style={styles.submitBtnText}>{t("validateBtn") || "VALIDER"}</Text>
               )}
             </TouchableOpacity>
           </View>
@@ -1279,19 +1029,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: 12,
   },
-  brandTitle: {
-    fontSize: 25,
-    fontWeight: "800",
-    color: COLORS.primary,
-    letterSpacing: 1.2,
-    textAlign: "center",
-  },
-  brandSubtitle: {
-    fontSize: 12,
-    color: "#64748B",
-    marginTop: 4,
-    textAlign: "center",
-  },
   formContainer: {
     marginTop: 12,
   },
@@ -1307,12 +1044,6 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: "#0F172A",
     fontWeight: "500",
-  },
-  countryText: {
-    flex: 1,
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#0F172A",
   },
   label: {
     fontSize: 12,
