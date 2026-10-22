@@ -27,6 +27,13 @@ import {
 } from "../../context/ThemeLanguageContext";
 import apiClient from "../../api/client";
 import localLocations from "../../data/algeriaLocations.json";
+import { GOOGLE_MAPS_API_KEY, DEFAULT_COORDS } from "../../config/mapsConfig";
+import {
+  testGoogleMapsAccess,
+  reverseGeocodeCoords,
+  searchAddressSuggestions,
+  getGooglePlaceCoordinates,
+} from "../../services/MapService";
 
 const DEFAULT_VEHICLES = [
   {
@@ -68,27 +75,34 @@ const DEFAULT_VEHICLES = [
 ];
 
 export default function NewOrderScreen({ navigation }) {
-  const { t, lang, isRTL } = useThemeLang();
+  const { t, isRTL } = useThemeLang();
   const webViewRef = useRef(null);
 
+  // Moteur de carte actif : true = Google Maps | false = OpenStreetMap
+  const [isGoogleMapsActive, setIsGoogleMapsActive] = useState(false);
+
   const [vehicles, setVehicles] = useState(DEFAULT_VEHICLES);
-  const [pickupCoords, setPickupCoords] = useState({
-    lat: 36.1528,
-    lon: 5.6902,
-  });
+  const [pickupCoords, setPickupCoords] = useState(DEFAULT_COORDS);
   const [deliveryCoords, setDeliveryCoords] = useState(null);
   const [pickupCommune, setPickupCommune] = useState("El Eulma");
   const [deliveryCommune, setDeliveryCommune] = useState("El Eulma");
-
   const [pickupText, setPickupText] = useState("Position GPS...");
   const [destinationText, setDestinationText] = useState("");
+
+  // Champ actuellement ciblé par la recherche ('pickup' ou 'destination')
+  const [activeField, setActiveField] = useState("destination");
   const [suggestions, setSuggestions] = useState([]);
-  const [searchingAddress, setSearchingAddress] = useState(false);
+
+  const [isKeyboardVisible, setIsKeyboardVisible] = useState(false);
+  const [isInputFocused, setIsInputFocused] = useState(false);
+
+  // Masquer le panneau inférieur si le clavier est ouvert, si un champ est actif ou si des suggestions sont affichées
+  const shouldHideBottomSheet =
+    isKeyboardVisible || isInputFocused || suggestions.length > 0;
 
   const [selectedVehicle, setSelectedVehicle] = useState("moto");
   const [selectedParcelType, setSelectedParcelType] = useState("boxParcel");
   const [distanceKm, setDistanceKm] = useState(2.0);
-
   const [detailsModalVisible, setDetailsModalVisible] = useState(false);
   const [parcelDescription, setParcelDescription] = useState("");
   const [recipientPhone, setRecipientPhone] = useState("");
@@ -97,12 +111,15 @@ export default function NewOrderScreen({ navigation }) {
   const [submitting, setSubmitting] = useState(false);
   const [phoneErrorText, setPhoneErrorText] = useState("");
 
-  // Animation pour l'icône GPS clignotante
+  // Animation pour l'icône GPS clignotante lors de la localisation
   const [isGpsLocating, setIsGpsLocating] = useState(false);
   const blinkAnim = useRef(new Animated.Value(1)).current;
 
   const rowDir = isRTL ? "row-reverse" : "row";
   const textAlignDir = isRTL ? "right" : "left";
+
+  // Couleur de l'icône GPS : Vert (Google Maps) ou Orange (OSM)
+  const engineColor = isGoogleMapsActive ? "#16A34A" : "#EA580C";
 
   const PARCEL_TYPES = [
     { key: "boxParcel", label: t("boxParcel"), icon: "cube-outline" },
@@ -129,12 +146,12 @@ export default function NewOrderScreen({ navigation }) {
         Animated.sequence([
           Animated.timing(blinkAnim, {
             toValue: 0.2,
-            duration: 400,
+            duration: 350,
             useNativeDriver: true,
           }),
           Animated.timing(blinkAnim, {
             toValue: 1,
-            duration: 400,
+            duration: 350,
             useNativeDriver: true,
           }),
         ]),
@@ -147,33 +164,33 @@ export default function NewOrderScreen({ navigation }) {
   }, [isGpsLocating]);
 
   useEffect(() => {
-    fetchTransportModes();
-    triggerAutoGps();
-
-    let locationWatcher = null;
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === "granted") {
-          locationWatcher = await Location.watchPositionAsync(
-            {
-              accuracy: Location.Accuracy.Balanced,
-              timeInterval: 10000,
-              distanceInterval: 30,
-            },
-            (loc) => {
-              const { latitude, longitude } = loc.coords;
-              setPickupCoords({ lat: latitude, lon: longitude });
-              reverseGeocode(latitude, longitude, "pickup");
-            },
-          );
-        }
-      } catch (e) {}
-    })();
-
+    const showSub = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillShow" : "keyboardDidShow",
+      () => setIsKeyboardVisible(true),
+    );
+    const hideSub = Keyboard.addListener(
+      Platform.OS === "ios" ? "keyboardWillHide" : "keyboardDidHide",
+      () => {
+        setIsKeyboardVisible(false);
+        setIsInputFocused(false);
+      },
+    );
     return () => {
-      if (locationWatcher) locationWatcher.remove();
+      showSub.remove();
+      hideSub.remove();
     };
+  }, []);
+
+  useEffect(() => {
+    const initialize = async () => {
+      const isAvailable = await testGoogleMapsAccess();
+      setIsGoogleMapsActive(isAvailable);
+
+      await fetchTransportModes();
+      await triggerAutoGps(isAvailable);
+    };
+
+    initialize();
   }, []);
 
   const fetchTransportModes = async () => {
@@ -192,7 +209,7 @@ export default function NewOrderScreen({ navigation }) {
     } catch (e) {}
   };
 
-  const triggerAutoGps = async () => {
+  const triggerAutoGps = async (googleActiveFlag = isGoogleMapsActive) => {
     setIsGpsLocating(true);
     try {
       const { status } = await Location.requestForegroundPermissionsAsync();
@@ -205,7 +222,14 @@ export default function NewOrderScreen({ navigation }) {
       });
       const { latitude, longitude } = loc.coords;
       setPickupCoords({ lat: latitude, lon: longitude });
-      await reverseGeocode(latitude, longitude, "pickup");
+
+      const geo = await reverseGeocodeCoords(
+        latitude,
+        longitude,
+        googleActiveFlag,
+      );
+      setPickupText(geo.address);
+      setPickupCommune(geo.commune);
     } catch (e) {
       console.log("GPS Error:", e);
     } finally {
@@ -213,6 +237,7 @@ export default function NewOrderScreen({ navigation }) {
     }
   };
 
+  // Recalcul de l'estimation de distance à vol d'oiseau si les deux points changent
   useEffect(() => {
     if (pickupCoords && deliveryCoords) {
       const R = 6371;
@@ -229,98 +254,68 @@ export default function NewOrderScreen({ navigation }) {
       setDistanceKm(d);
     }
     updateMapMarkers();
-  }, [pickupCoords, deliveryCoords]);
+  }, [pickupCoords, deliveryCoords, isGoogleMapsActive]);
 
-  const reverseGeocode = async (lat, lon, target) => {
-    try {
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${lat}&lon=${lon}&accept-language=fr`,
-        { headers: { "User-Agent": "Mozilla/5.0 LivriliAlgeria/1.0" } },
-      );
-      const data = await res.json();
-      if (data && data.display_name) {
-        const shortName = data.display_name.split(",").slice(0, 3).join(", ");
-        const com =
-          data.address?.city ||
-          data.address?.town ||
-          data.address?.village ||
-          data.address?.municipality ||
-          "El Eulma";
-        if (target === "pickup") {
-          setPickupText(shortName);
-          setPickupCommune(com.trim());
-        } else {
-          setDestinationText(shortName);
-          setDeliveryCommune(com.trim());
-        }
-      }
-    } catch (err) {}
-  };
+  // Recherche dynamique pour le départ ou l'arrivée (avec biais de proximité GPS)
+  const handleSearchAddress = async (query, targetField) => {
+    setActiveField(targetField);
+    if (targetField === "pickup") {
+      setPickupText(query);
+    } else {
+      setDestinationText(query);
+    }
 
-  const searchAlgerianAddress = async (query) => {
-    setDestinationText(query);
-    const cleanQuery = query.trim().toLowerCase();
-    if (cleanQuery.length === 0) {
-      const popular = localLocations.slice(0, 5).map((loc) => ({
-        place_id: loc.id,
-        display_name: `${loc.name_fr} - ${loc.name_ar}`,
-        lat: loc.lat,
-        lon: loc.lon,
-        commune: loc.commune,
-      }));
-      setSuggestions(popular);
+    if (!query || query.trim().length < 2) {
+      setSuggestions([]);
       return;
     }
 
-    const matchedLocal = localLocations
-      .filter(
-        (loc) =>
-          loc.name_fr.toLowerCase().includes(cleanQuery) ||
-          loc.name_ar.includes(cleanQuery) ||
-          loc.commune.toLowerCase().includes(cleanQuery),
-      )
-      .map((loc) => ({
-        place_id: loc.id,
-        display_name: `${loc.name_fr} - ${loc.name_ar}`,
-        lat: loc.lat,
-        lon: loc.lon,
-        commune: loc.commune,
-      }));
-
-    setSuggestions(matchedLocal);
-    if (cleanQuery.length < 3) return;
-
-    setSearchingAddress(true);
-    try {
-      const url = `https://nominatim.openstreetmap.org/search?format=json&countrycodes=dz&addressdetails=1&accept-language=fr&limit=4&q=${encodeURIComponent(
-        query + " Algeria",
-      )}`;
-      const res = await fetch(url, {
-        headers: { "User-Agent": "Mozilla/5.0 LivriliAlgeria/1.0" },
-      });
-      const osmData = await res.json();
-      if (Array.isArray(osmData)) {
-        const formattedOsm = osmData.map((item) => ({
-          place_id: String(item.place_id),
-          display_name: item.display_name.split(",").slice(0, 3).join(", "),
-          lat: parseFloat(item.lat),
-          lon: parseFloat(item.lon),
-          commune: item.address?.city || item.address?.town || pickupCommune,
-        }));
-        setSuggestions([...matchedLocal, ...formattedOsm]);
-      }
-    } catch (err) {
-    } finally {
-      setSearchingAddress(false);
-    }
+    const results = await searchAddressSuggestions(
+      query,
+      isGoogleMapsActive,
+      localLocations,
+      pickupCommune,
+      pickupCoords, // <-- Priorise les résultats Google autour de la position actuelle
+    );
+    setSuggestions(results);
   };
 
-  const handleSelectSuggestion = (item) => {
-    setDestinationText(item.display_name);
-    setDeliveryCoords({ lat: parseFloat(item.lat), lon: parseFloat(item.lon) });
-    if (item.commune) setDeliveryCommune(item.commune);
-    setSuggestions([]);
+  // Sélection d'une adresse dans la liste déroulante
+  const handleSelectSuggestion = async (item) => {
     Keyboard.dismiss();
+    setIsInputFocused(false);
+    setSuggestions([]);
+
+    let coords = null;
+    let communeName = pickupCommune;
+    let fullAddress = item.display_name;
+
+    // Si l'élément contient déjà lat/lon (ex: retour direct Geocoding ou OSM)
+    if (item.lat && item.lon) {
+      coords = { lat: parseFloat(item.lat), lon: parseFloat(item.lon) };
+      if (item.commune) communeName = item.commune;
+    } else if (item.isGoogle) {
+      // Sinon on récupère les coordonnées via PlaceId (v1 ou Geocode)
+      const details = await getGooglePlaceCoordinates(
+        item.place_id,
+        item.display_name,
+      );
+      if (details) {
+        coords = { lat: details.lat, lon: details.lon };
+        communeName = details.commune;
+        fullAddress = details.display_name;
+      }
+    }
+
+    if (activeField === "pickup") {
+      setPickupText(fullAddress);
+      setPickupCommune(communeName);
+      if (coords) setPickupCoords(coords);
+    } else {
+      setDestinationText(fullAddress);
+      setDeliveryCommune(communeName);
+      if (coords) setDeliveryCoords(coords);
+    }
   };
 
   const updateMapMarkers = () => {
@@ -344,7 +339,6 @@ export default function NewOrderScreen({ navigation }) {
     const perKm = Number(vehicle.per_km ?? 50);
     const rtMult = Number(vehicle.round_trip_multiplier ?? 1.6);
     const pricingMode = vehicle.pricing_mode || "per_km";
-
     const sameCommune =
       !deliveryCommune ||
       pickupCommune.trim().toLowerCase() ===
@@ -389,10 +383,8 @@ export default function NewOrderScreen({ navigation }) {
       setPhoneErrorText(t("errPhone"));
       return;
     }
-
     setDetailsModalVisible(false);
     setSubmitting(true);
-
     try {
       let finalDelivCoords = deliveryCoords;
       if (!finalDelivCoords) {
@@ -401,9 +393,10 @@ export default function NewOrderScreen({ navigation }) {
           lon: pickupCoords.lon + 0.01,
         };
       }
-
       const selectedTypeLabel = t(selectedParcelType);
-      const finalDesc = `${selectedTypeLabel}${parcelDescription.trim() ? " - " + parcelDescription.trim() : ""}`;
+      const finalDesc = `${selectedTypeLabel}${
+        parcelDescription.trim() ? " - " + parcelDescription.trim() : ""
+      }`;
 
       const res = await apiClient.post("customer.php?action=create_order", {
         pickup_lat: pickupCoords.lat,
@@ -428,7 +421,6 @@ export default function NewOrderScreen({ navigation }) {
         setDestinationText("");
         setDeliveryCoords(null);
         setParcelDescription("");
-        // Redirection directe vers Orders avec focus sur la nouvelle commande
         navigation.navigate("Orders", { newOrderId: createdOrderId });
       } else {
         Alert.alert("Info", res.data?.error || "Erreur lors de la création.");
@@ -443,7 +435,257 @@ export default function NewOrderScreen({ navigation }) {
     }
   };
 
-  const leafletHtml = `
+  // Google Maps JS avec nettoyage automatique et support Routes API + OSRM
+  const googleMapsHtml = `
+    <!DOCTYPE html>
+    <html>
+    <head>
+      <meta charset="utf-8" />
+      <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+      <style>
+        * { margin:0; padding:0; box-sizing:border-box; }
+        html, body, #map { width:100%; height:100%; overflow:hidden; background:#e5e7eb; }
+      </style>
+      <script>
+        window.gm_authFailure = function() {
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'GOOGLE_AUTH_FAILED' }));
+          }
+        };
+      </script>
+      <script src="https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry"></script>
+    </head>
+    <body>
+      <div id="map"></div>
+      <script>
+        var map;
+        var pickupMarker;
+        var deliveryMarker;
+        var directionsService;
+        var directionsRenderer;
+        var routePolyline = null; // Stocke le tracé pour pouvoir l'effacer au clic suivant
+
+        function clearCurrentRoute() {
+          if (directionsRenderer) {
+            directionsRenderer.set('directions', null);
+          }
+          if (routePolyline) {
+            routePolyline.setMap(null);
+            routePolyline = null;
+          }
+        }
+
+        function initMap() {
+          var startPos = { lat: ${pickupCoords.lat}, lng: ${pickupCoords.lon} };
+          map = new google.maps.Map(document.getElementById('map'), {
+            center: startPos,
+            zoom: 14,
+            disableDefaultUI: true,
+            gestureHandling: 'greedy'
+          });
+
+          directionsService = new google.maps.DirectionsService();
+          directionsRenderer = new google.maps.DirectionsRenderer({
+            map: map,
+            suppressMarkers: true,
+            polylineOptions: { strokeColor: '#EA580C', strokeWeight: 5, strokeOpacity: 0.9 }
+          });
+
+          pickupMarker = new google.maps.Marker({
+            position: startPos,
+            map: map,
+            icon: {
+              path: google.maps.SymbolPath.CIRCLE,
+              scale: 8,
+              fillColor: '#16A34A',
+              fillOpacity: 1,
+              strokeColor: '#FFFFFF',
+              strokeWeight: 3
+            }
+          });
+
+          map.addListener('click', function(e) {
+            var lat = e.latLng.lat();
+            var lng = e.latLng.lng();
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({
+                type: 'MAP_CLICK',
+                lat: lat,
+                lon: lng
+              }));
+            }
+          });
+        }
+
+        // Fonction qui trace une vraie route via la nouvelle Routes API de Google ou OSRM
+        function drawRealRoadFallback(pLat, pLon, dLat, dLon) {
+          // 1. Appel à la nouvelle Routes API v2 (déjà activée sur votre compte GCC)
+          fetch('https://routes.googleapis.com/directions/v2:computeRoutes', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Goog-Api-Key': '${GOOGLE_MAPS_API_KEY}',
+              'X-Goog-FieldMask': 'routes.distanceMeters,routes.polyline.encodedPolyline'
+            },
+            body: JSON.stringify({
+              origin: { location: { latLng: { latitude: Number(pLat), longitude: Number(pLon) } } },
+              destination: { location: { latLng: { latitude: Number(dLat), longitude: Number(dLon) } } },
+              travelMode: 'DRIVE'
+            })
+          })
+          .then(function(res) { return res.json(); })
+          .then(function(data) {
+            if (data.routes && data.routes.length > 0) {
+              clearCurrentRoute();
+              var encoded = data.routes[0].polyline.encodedPolyline;
+              var decodedPath = google.maps.geometry.encoding.decodePath(encoded);
+
+              routePolyline = new google.maps.Polyline({
+                path: decodedPath,
+                geodesic: true,
+                strokeColor: '#EA580C',
+                strokeOpacity: 0.9,
+                strokeWeight: 5,
+                map: map
+              });
+
+              var bounds = new google.maps.LatLngBounds();
+              decodedPath.forEach(function(pt) { bounds.extend(pt); });
+              map.fitBounds(bounds, 50);
+
+              var distKm = parseFloat((data.routes[0].distanceMeters / 1000).toFixed(1));
+              if (window.ReactNativeWebView) {
+                window.ReactNativeWebView.postMessage(JSON.stringify({
+                  type: 'ROUTE_CALCULATED',
+                  distance: distKm
+                }));
+              }
+            } else {
+              throw new Error('Routes API vide');
+            }
+          })
+          .catch(function() {
+            // 2. Secours routier réel via OSRM si Routes API échoue
+            var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/' +
+              pLon + ',' + pLat + ';' + dLon + ',' + dLat +
+              '?overview=full&geometries=geojson';
+
+            fetch(osrmUrl)
+              .then(function(r) { return r.json(); })
+              .then(function(osrmData) {
+                clearCurrentRoute();
+                if (osrmData.routes && osrmData.routes.length > 0) {
+                  var coords = osrmData.routes[0].geometry.coordinates.map(function(c) {
+                    return { lat: c[1], lng: c[0] };
+                  });
+                  routePolyline = new google.maps.Polyline({
+                    path: coords,
+                    geodesic: true,
+                    strokeColor: '#EA580C',
+                    strokeOpacity: 0.9,
+                    strokeWeight: 5,
+                    map: map
+                  });
+
+                  var bounds = new google.maps.LatLngBounds();
+                  coords.forEach(function(pt) { bounds.extend(pt); });
+                  map.fitBounds(bounds, 50);
+
+                  var distKm = parseFloat((osrmData.routes[0].distance / 1000).toFixed(1));
+                  if (window.ReactNativeWebView) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                      type: 'ROUTE_CALCULATED',
+                      distance: distKm
+                    }));
+                  }
+                }
+              })
+              .catch(function() {
+                // 3. Dernier recours : Ligne droite unique (en nettoyant la précédente)
+                clearCurrentRoute();
+                routePolyline = new google.maps.Polyline({
+                  path: [
+                    { lat: Number(pLat), lng: Number(pLon) },
+                    { lat: Number(dLat), lng: Number(dLon) }
+                  ],
+                  geodesic: true,
+                  strokeColor: '#EA580C',
+                  strokeOpacity: 0.8,
+                  strokeWeight: 4,
+                  map: map
+                });
+              });
+          });
+        }
+
+        window.updateLivriliMap = function(data) {
+          try {
+            if (!map) return;
+            if (data.pickup) {
+              pickupMarker.setPosition({ lat: Number(data.pickup.lat), lng: Number(data.pickup.lon) });
+            }
+            if (data.delivery) {
+              var dPos = { lat: Number(data.delivery.lat), lng: Number(data.delivery.lon) };
+              if (!deliveryMarker) {
+                deliveryMarker = new google.maps.Marker({
+                  position: dPos,
+                  map: map,
+                  icon: {
+                    path: google.maps.SymbolPath.CIRCLE,
+                    scale: 9,
+                    fillColor: '#DC2626',
+                    fillOpacity: 1,
+                    strokeColor: '#FFFFFF',
+                    strokeWeight: 3
+                  }
+                });
+              } else {
+                deliveryMarker.setPosition(dPos);
+              }
+
+              // Nettoyage systématique de l'ancien tracé avant de calculer le nouveau
+              clearCurrentRoute();
+
+              directionsService.route({
+                origin: new google.maps.LatLng(data.pickup.lat, data.pickup.lon),
+                destination: new google.maps.LatLng(data.delivery.lat, data.delivery.lon),
+                travelMode: google.maps.TravelMode.DRIVING
+              }, function(result, status) {
+                if (status === google.maps.DirectionsStatus.OK) {
+                  clearCurrentRoute();
+                  directionsRenderer.setDirections(result);
+                  var meters = result.routes[0].legs[0].distance.value;
+                  var distKm = parseFloat((meters / 1000).toFixed(1));
+                  if (window.ReactNativeWebView) {
+                    window.ReactNativeWebView.postMessage(JSON.stringify({
+                      type: 'ROUTE_CALCULATED',
+                      distance: distKm
+                    }));
+                  }
+                } else {
+                  // Bascule immédiate sur Routes API v2 / OSRM pour tracer la vraie route
+                  drawRealRoadFallback(data.pickup.lat, data.pickup.lon, data.delivery.lat, data.delivery.lon);
+                }
+              });
+            } else {
+              // Si on efface la destination (bouton X), on retire le marqueur rouge et la route
+              if (deliveryMarker) {
+                deliveryMarker.setMap(null);
+                deliveryMarker = null;
+              }
+              clearCurrentRoute();
+            }
+          } catch(err) {}
+        };
+
+        window.onload = initMap;
+      </script>
+    </body>
+    </html>
+  `;
+
+  // Leaflet / OpenStreetMap Fallback
+  const leafletOsmHtml = `
     <!DOCTYPE html>
     <html>
     <head>
@@ -452,86 +694,90 @@ export default function NewOrderScreen({ navigation }) {
       <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
       <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
       <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        html, body { width: 100%; height: 100%; overflow: hidden; background: #e5e7eb; }
-        #map { position: absolute; top: 0; left: 0; right: 0; bottom: 0; width: 100%; height: 100%; }
+        * { margin:0; padding:0; box-sizing:border-box; }
+        html, body, #map { width:100%; height:100%; overflow:hidden; background:#e5e7eb; }
         .leaflet-control-attribution { display: none !important; }
       </style>
     </head>
     <body>
       <div id="map"></div>
       <script>
-        var map = L.map('map', { zoomControl: false }).setView([36.1528, 5.6902], 14);
-        L.tileLayer('https://mt1.google.com/vt/lyrs=m&x={x}&y={y}&z={z}', { maxZoom: 20 }).addTo(map);
+        var map = L.map('map', { zoomControl: false }).setView([${pickupCoords.lat}, ${pickupCoords.lon}], 14);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+
         var greenIcon = L.divIcon({
           html: '<div style="width:18px;height:18px;background:#16A34A;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.45);"></div>',
           className: '', iconSize: [22, 22], iconAnchor: [11, 11]
         });
         var redPinIcon = L.divIcon({
-          html: '<div style="width:24px;height:24px;background:#DC2626;border:3px solid #fff;border-radius:50% 50% 50% 0;transform:rotate(-45deg);box-shadow:0 3px 8px rgba(0,0,0,0.5);"></div>',
-          className: '', iconSize: [26, 26], iconAnchor: [13, 26]
+          html: '<div style="width:20px;height:20px;background:#DC2626;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.45);"></div>',
+          className: '', iconSize: [24, 24], iconAnchor: [12, 12]
         });
-        var pickupMarker = L.marker([36.1528, 5.6902], { icon: greenIcon }).addTo(map);
+
+        var pickupMarker = L.marker([${pickupCoords.lat}, ${pickupCoords.lon}], { icon: greenIcon }).addTo(map);
         var deliveryMarker = null;
         var routeLine = null;
+
         map.on('click', function(e) {
           if (window.ReactNativeWebView) {
             window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'MAP_CLICK', lat: e.latlng.lat, lon: e.latlng.lng }));
           }
         });
+
         window.updateLivriliMap = function(data) {
-  try {
-    map.invalidateSize();
-    if (data.pickup) { 
-      pickupMarker.setLatLng([data.pickup.lat, data.pickup.lon]); 
-    }
-    if (data.delivery) {
-      if (!deliveryMarker) {
-        deliveryMarker = L.marker([data.delivery.lat, data.delivery.lon], { icon: redPinIcon }).addTo(map);
-      } else {
-        deliveryMarker.setLatLng([data.delivery.lat, data.delivery.lon]);
-      }
-
-      // Calcul de l'itinéraire routier réel via OSRM
-      var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/' +
-        data.pickup.lon + ',' + data.pickup.lat + ';' +
-        data.delivery.lon + ',' + data.delivery.lat +
-        '?overview=full&geometries=geojson';
-
-      fetch(osrmUrl)
-        .then(function(res) { return res.json(); })
-        .then(function(routeData) {
-          if (routeData.routes && routeData.routes.length > 0) {
-            if (routeLine) map.removeLayer(routeLine);
-            
-            // Tracé sur les vraies routes
-            routeLine = L.geoJSON(routeData.routes[0].geometry, {
-              style: { color: '#EA580C', weight: 5, opacity: 0.9 }
-            }).addTo(map);
-
-            map.fitBounds(routeLine.getBounds(), { padding: [50, 50] });
-
-            // Envoi de la distance routière exacte à React Native
-            var realDistanceKm = parseFloat((routeData.routes[0].distance / 1000).toFixed(1));
-            if (window.ReactNativeWebView) {
-              window.ReactNativeWebView.postMessage(JSON.stringify({
-                type: 'ROUTE_CALCULATED',
-                distance: realDistanceKm
-              }));
+          try {
+            map.invalidateSize();
+            if (data.pickup) {
+              pickupMarker.setLatLng([data.pickup.lat, data.pickup.lon]);
             }
-          }
-        })
-        .catch(function(err) {
-          // Fallback en ligne droite si OSRM est temporairement inaccessible
-          if (routeLine) map.removeLayer(routeLine);
-          routeLine = L.polyline([[data.pickup.lat, data.pickup.lon], [data.delivery.lat, data.delivery.lon]], {
-            color: '#EA580C', weight: 4, dashArray: '6, 6'
-          }).addTo(map);
-          map.fitBounds([[data.pickup.lat, data.pickup.lon], [data.delivery.lat, data.delivery.lon]], { padding: [50, 50] });
-        });
-    }
-  } catch(e) {}
-};
+            if (data.delivery) {
+              if (!deliveryMarker) {
+                deliveryMarker = L.marker([data.delivery.lat, data.delivery.lon], { icon: redPinIcon }).addTo(map);
+              } else {
+                deliveryMarker.setLatLng([data.delivery.lat, data.delivery.lon]);
+              }
+
+              var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/' +
+                data.pickup.lon + ',' + data.pickup.lat + ';' +
+                data.delivery.lon + ',' + data.delivery.lat +
+                '?overview=full&geometries=geojson';
+
+              fetch(osrmUrl)
+                .then(function(res) { return res.json(); })
+                .then(function(routeData) {
+                  if (routeData.routes && routeData.routes.length > 0) {
+                    if (routeLine) map.removeLayer(routeLine);
+                    routeLine = L.geoJSON(routeData.routes[0].geometry, {
+                      style: { color: '#EA580C', weight: 5, opacity: 0.9 }
+                    }).addTo(map);
+                    map.fitBounds(routeLine.getBounds(), { padding: [50, 50] });
+
+                    var realDistanceKm = parseFloat((routeData.routes[0].distance / 1000).toFixed(1));
+                    if (window.ReactNativeWebView) {
+                      window.ReactNativeWebView.postMessage(JSON.stringify({
+                        type: 'ROUTE_CALCULATED',
+                        distance: realDistanceKm
+                      }));
+                    }
+                  }
+                })
+                .catch(function() {
+                  if (routeLine) map.removeLayer(routeLine);
+                  routeLine = L.polyline([[data.pickup.lat, data.pickup.lon], [data.delivery.lat, data.delivery.lon]], {
+                    color: '#EA580C', weight: 4, dashArray: '6, 6'
+                  }).addTo(map);
+                  map.fitBounds([[data.pickup.lat, data.pickup.lon], [data.delivery.lat, data.delivery.lon]], { padding: [50, 50] });
+                });
+            } else if (deliveryMarker) {
+              map.removeLayer(deliveryMarker);
+              deliveryMarker = null;
+              if (routeLine) {
+                map.removeLayer(routeLine);
+                routeLine = null;
+              }
+            }
+          } catch(e) {}
+        };
       </script>
     </body>
     </html>
@@ -539,31 +785,56 @@ export default function NewOrderScreen({ navigation }) {
 
   return (
     <View style={styles.container}>
-      {/* 1. CARTE AGRANDIE */}
+      {/* 1. CARTE (Pleine page en arrière-plan) */}
       <View style={styles.mapContainer}>
         <WebView
+          key={isGoogleMapsActive ? "google-map" : "osm-map"}
           ref={webViewRef}
           originWhitelist={["*"]}
-          source={{ html: leafletHtml }}
+          source={{
+            html: isGoogleMapsActive ? googleMapsHtml : leafletOsmHtml,
+          }}
           style={styles.map}
           javaScriptEnabled={true}
           domStorageEnabled={true}
           onLoadEnd={updateMapMarkers}
-          onMessage={(event) => {
+          onMessage={async (event) => {
             try {
               const msg = JSON.parse(event.nativeEvent.data);
               if (msg.type === "MAP_CLICK") {
-                setDeliveryCoords({ lat: msg.lat, lon: msg.lon });
-                reverseGeocode(msg.lat, msg.lon, "destination");
+                Keyboard.dismiss();
+                setIsInputFocused(false);
+                setSuggestions([]);
+                const geo = await reverseGeocodeCoords(
+                  msg.lat,
+                  msg.lon,
+                  isGoogleMapsActive,
+                );
+                // Si l'utilisateur avait sélectionné le départ, le clic modifie le départ
+                if (activeField === "pickup") {
+                  setPickupCoords({ lat: msg.lat, lon: msg.lon });
+                  setPickupText(geo.address);
+                  setPickupCommune(geo.commune);
+                } else {
+                  // Sinon, il modifie l'arrivée (comportement par défaut)
+                  setDeliveryCoords({ lat: msg.lat, lon: msg.lon });
+                  setDestinationText(geo.address);
+                  setDeliveryCommune(geo.commune);
+                }
               } else if (msg.type === "ROUTE_CALCULATED" && msg.distance > 0) {
-                setDistanceKm(msg.distance); // Ajuste la distance réelle et le prix calculé
+                setDistanceKm(msg.distance);
+              } else if (msg.type === "GOOGLE_AUTH_FAILED") {
+                console.warn(
+                  "Échec d'authentification Google Maps -> Bascule automatique sur OpenStreetMap",
+                );
+                setIsGoogleMapsActive(false);
               }
             } catch (e) {}
           }}
         />
       </View>
 
-      {/* 2. BARRE D'ADRESSES EN HAUT */}
+      {/* 2. BARRE DE DÉPART ET D'ARRIVÉE */}
       <View style={styles.topOverlay}>
         <View style={[styles.addressCard, { flexDirection: rowDir }]}>
           <View style={styles.timelineColumn}>
@@ -571,61 +842,76 @@ export default function NewOrderScreen({ navigation }) {
             <View style={styles.verticalLine} />
             <View style={styles.redSquare} />
           </View>
-
           <View style={styles.inputsColumn}>
+            {/* CHAMP DÉPART (MODIFIABLE) */}
             <View style={[styles.inputRow, { flexDirection: rowDir }]}>
               <TextInput
-                style={[
-                  styles.addressInput,
-                  styles.lockedInput,
-                  { textAlign: textAlignDir },
-                ]}
+                style={[styles.addressInput, { textAlign: textAlignDir }]}
                 value={pickupText}
-                editable={false}
-                selectTextOnFocus={false}
                 placeholder={t("pickupPlaceholder")}
                 placeholderTextColor="#94A3B8"
+                onFocus={() => {
+                  setActiveField("pickup");
+                  setIsInputFocused(true);
+                }}
+                onBlur={() => setIsInputFocused(false)}
+                onChangeText={(txt) => handleSearchAddress(txt, "pickup")}
               />
+              {pickupText.length > 0 && (
+                <TouchableOpacity
+                  style={styles.clearBtn}
+                  onPress={() => {
+                    setPickupText("");
+                    setSuggestions([]);
+                  }}
+                >
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
+                </TouchableOpacity>
+              )}
+              {/* ICÔNE GPS QUI SERT D'INDICATEUR DE MOTEUR */}
               <TouchableOpacity
                 style={styles.gpsBtnIcon}
-                onPress={triggerAutoGps}
+                onPress={() => triggerAutoGps(isGoogleMapsActive)}
               >
                 <Animated.View style={{ opacity: blinkAnim }}>
-                  <Ionicons
-                    name="locate"
-                    size={22}
-                    color={isGpsLocating ? COLORS.primary : "#16A34A"}
-                  />
+                  <Ionicons name="locate" size={24} color={engineColor} />
                 </Animated.View>
               </TouchableOpacity>
             </View>
 
             <View style={styles.divider} />
 
+            {/* CHAMP DESTINATION */}
             <View style={[styles.inputRow, { flexDirection: rowDir }]}>
               <TextInput
                 style={[styles.addressInput, { textAlign: textAlignDir }]}
                 placeholder={t("destinationPlaceholder")}
                 placeholderTextColor="#94A3B8"
                 value={destinationText}
-                onChangeText={searchAlgerianAddress}
+                onFocus={() => {
+                  setActiveField("destination");
+                  setIsInputFocused(true);
+                }}
+                onBlur={() => setIsInputFocused(false)}
+                onChangeText={(txt) => handleSearchAddress(txt, "destination")}
               />
               {destinationText.length > 0 && (
                 <TouchableOpacity
-                  style={styles.gpsBtnIcon}
+                  style={styles.clearBtn}
                   onPress={() => {
                     setDestinationText("");
                     setDeliveryCoords(null);
                     setSuggestions([]);
                   }}
                 >
-                  <Ionicons name="close-circle" size={20} color="#94A3B8" />
+                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
                 </TouchableOpacity>
               )}
             </View>
           </View>
         </View>
 
+        {/* LISTE DES SUGGESTIONS D'ADRESSES */}
         {suggestions.length > 0 && (
           <View style={styles.suggestionsBox}>
             <FlatList
@@ -638,9 +924,9 @@ export default function NewOrderScreen({ navigation }) {
                   onPress={() => handleSelectSuggestion(item)}
                 >
                   <Ionicons
-                    name="location-outline"
+                    name={item.isGoogle ? "logo-google" : "location-outline"}
                     size={18}
-                    color={COLORS.primary}
+                    color={engineColor}
                   />
                   <Text
                     style={[
@@ -658,80 +944,79 @@ export default function NewOrderScreen({ navigation }) {
         )}
       </View>
 
-      {/* 3. PANNEAU INFÉRIEUR */}
-      <View style={styles.bottomSheet}>
-        <View style={styles.sheetHandle} />
-
-        <View style={[styles.vehiclesGridRow, { flexDirection: rowDir }]}>
-          {vehicles.map((v) => {
-            const isSelected = selectedVehicle === v.id;
-            const title = isRTL && v.title_ar ? v.title_ar : v.title_fr;
-            const iconColor = isSelected ? COLORS.primary : "#64748B";
-
-            return (
-              <TouchableOpacity
-                key={v.id}
-                activeOpacity={0.85}
-                onPress={() => setSelectedVehicle(v.id)}
-                style={[
-                  styles.vehicleCompactBox,
-                  isSelected && styles.vehicleCompactBoxSelected,
-                ]}
-              >
-                {v.id === "moto" ? (
-                  <Fontisto name="motorcycle" size={24} color={iconColor} />
-                ) : (
-                  <MaterialCommunityIcons
-                    name={v.icon || "truck-flatbed"}
-                    size={26}
-                    color={iconColor}
-                  />
-                )}
-                <Text
+      {/* 3. PANNEAU INFÉRIEUR : Masqué automatiquement pendant la saisie d'adresse */}
+      {!shouldHideBottomSheet && (
+        <View style={styles.bottomSheet}>
+          <View style={styles.sheetHandle} />
+          <View style={[styles.vehiclesGridRow, { flexDirection: rowDir }]}>
+            {vehicles.map((v) => {
+              const isSelected = selectedVehicle === v.id;
+              const title = isRTL && v.title_ar ? v.title_ar : v.title_fr;
+              const iconColor = isSelected ? COLORS.primary : "#64748B";
+              return (
+                <TouchableOpacity
+                  key={v.id}
+                  activeOpacity={0.85}
+                  onPress={() => setSelectedVehicle(v.id)}
                   style={[
-                    styles.vehicleSmallTitle,
-                    isSelected && styles.vehicleSmallTitleActive,
+                    styles.vehicleCompactBox,
+                    isSelected && styles.vehicleCompactBoxSelected,
                   ]}
-                  numberOfLines={1}
                 >
-                  {title}
+                  {v.id === "moto" ? (
+                    <Fontisto name="motorcycle" size={24} color={iconColor} />
+                  ) : (
+                    <MaterialCommunityIcons
+                      name={v.icon || "truck-flatbed"}
+                      size={26}
+                      color={iconColor}
+                    />
+                  )}
+                  <Text
+                    style={[
+                      styles.vehicleSmallTitle,
+                      isSelected && styles.vehicleSmallTitleActive,
+                    ]}
+                    numberOfLines={1}
+                  >
+                    {title}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+
+          {/* 4. BOUTON COMMANDER */}
+          <TouchableOpacity
+            style={styles.bookNowBtnFull}
+            onPress={handleOpenOrderPopup}
+            disabled={submitting}
+          >
+            {submitting ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <View style={[styles.btnPriceRow, { flexDirection: rowDir }]}>
+                <Text style={styles.bookNowText}>
+                  {t("bookNow")} (~{distanceKm} km)
                 </Text>
-              </TouchableOpacity>
-            );
-          })}
-        </View>
-
-        {/* 4. BOUTON COMMANDER AVEC DISTANCE ET PRIX */}
-        <TouchableOpacity
-          style={styles.bookNowBtnFull}
-          onPress={handleOpenOrderPopup}
-          disabled={submitting}
-        >
-          {submitting ? (
-            <ActivityIndicator size="small" color="#FFF" />
-          ) : (
-            <View style={[styles.btnPriceRow, { flexDirection: rowDir }]}>
-              <Text style={styles.bookNowText}>
-                {t("bookNow")} (~{distanceKm} km)
-              </Text>
-              <View
-                style={[
-                  styles.priceTagBadge,
-                  isRTL ? { marginRight: 10 } : { marginLeft: 10 },
-                ]}
-              >
-                <Text style={styles.priceTagText}>{finalPrice} DA</Text>
+                <View
+                  style={[
+                    styles.priceTagBadge,
+                    isRTL ? { marginRight: 10 } : { marginLeft: 10 },
+                  ]}
+                >
+                  <Text style={styles.priceTagText}>{finalPrice} DA</Text>
+                </View>
               </View>
-            </View>
-          )}
-        </TouchableOpacity>
-      </View>
+            )}
+          </TouchableOpacity>
+        </View>
+      )}
 
-      {/* 5. POPUP AVEC GRILLE 2x2 FACE À FACE & BOUTONS ANNULER / CHERCHER CÔTE À CÔTE */}
+      {/* 5. MODAL DE CONFIRMATION */}
       <Modal visible={detailsModalVisible} animationType="fade" transparent>
         <View style={styles.popupBackdrop}>
           <View style={styles.popupCard}>
-            {/* EN-TÊTE AVEC BOUTON DE FERMETURE EN HAUT À DROITE */}
             <View style={[styles.modalHeaderRow, { flexDirection: rowDir }]}>
               <Text
                 style={[
@@ -748,10 +1033,7 @@ export default function NewOrderScreen({ navigation }) {
                 <Ionicons name="close" size={22} color="#475569" />
               </TouchableOpacity>
             </View>
-
             <ScrollView showsVerticalScrollIndicator={false}>
-              {/* TYPES DE COLIS FACE À FACE (2 PAR LIGNE EN GRILLE) */}
-              {/* TYPES DE COLIS FACE À FACE AVEC ICÔNES ET ESPACEMENT RTL CORRIGÉ */}
               <Text
                 style={[
                   styles.inputSubLabel,
@@ -773,7 +1055,6 @@ export default function NewOrderScreen({ navigation }) {
                       ]}
                       onPress={() => setSelectedParcelType(pt.key)}
                     >
-                      {/* Bouton Radio avec marge dynamique RTL */}
                       <View
                         style={[
                           styles.radioOuter,
@@ -785,8 +1066,6 @@ export default function NewOrderScreen({ navigation }) {
                       >
                         {selected && <View style={styles.radioInner} />}
                       </View>
-
-                      {/* Icône du type de colis */}
                       <Ionicons
                         name={pt.icon}
                         size={17}
@@ -797,8 +1076,6 @@ export default function NewOrderScreen({ navigation }) {
                             : { marginRight: 8, marginLeft: 0 }
                         }
                       />
-
-                      {/* Titre du type de colis */}
                       <Text
                         style={[
                           styles.radioLabel,
@@ -814,7 +1091,6 @@ export default function NewOrderScreen({ navigation }) {
                 })}
               </View>
 
-              {/* TÉLÉPHONE DESTINATAIRE OBLIGATOIRE */}
               <Text
                 style={[
                   styles.inputSubLabel,
@@ -848,7 +1124,6 @@ export default function NewOrderScreen({ navigation }) {
                 </Text>
               ) : null}
 
-              {/* INSTRUCTIONS COMPLÉMENTAIRES */}
               <TextInput
                 style={[
                   styles.popupInput,
@@ -860,7 +1135,6 @@ export default function NewOrderScreen({ navigation }) {
                 onChangeText={setParcelDescription}
               />
 
-              {/* ALLER-RETOUR */}
               <View style={[styles.switchRow, { flexDirection: rowDir }]}>
                 <Text style={styles.radioLabel}>{t("roundTrip")}</Text>
                 <Switch
@@ -870,7 +1144,6 @@ export default function NewOrderScreen({ navigation }) {
                 />
               </View>
 
-              {/* QUI PAIE */}
               <View style={[styles.paymentRow, { flexDirection: rowDir }]}>
                 <TouchableOpacity
                   style={[
@@ -906,7 +1179,6 @@ export default function NewOrderScreen({ navigation }) {
                 </TouchableOpacity>
               </View>
 
-              {/* BOUTONS CÔTE À CÔTE : ANNULER & CHERCHER */}
               <View
                 style={[
                   styles.actionButtonsContainer,
@@ -919,7 +1191,6 @@ export default function NewOrderScreen({ navigation }) {
                 >
                   <Text style={styles.cancelBtnText}>{t("cancel")}</Text>
                 </TouchableOpacity>
-
                 <TouchableOpacity
                   style={styles.popupOkBtn}
                   onPress={handleConfirmOrder}
@@ -947,7 +1218,7 @@ const styles = StyleSheet.create({
   },
   map: { flex: 1, width: "100%", height: "100%" },
   topOverlay: {
-    paddingTop: Platform.OS === "ios" ? 48 : 32,
+    paddingTop: Platform.OS === "ios" ? 48 : 36,
     paddingHorizontal: 14,
     zIndex: 20,
   },
@@ -988,13 +1259,8 @@ const styles = StyleSheet.create({
     paddingVertical: 8,
     includeFontPadding: false,
   },
-  lockedInput: {
-    color: "#334155",
-    backgroundColor: "#F8FAFC",
-    borderRadius: 8,
-    paddingHorizontal: 6,
-  },
-  gpsBtnIcon: { padding: 6, marginHorizontal: 4 },
+  clearBtn: { padding: 4, marginHorizontal: 2 },
+  gpsBtnIcon: { padding: 6, marginHorizontal: 2 },
   divider: { height: 1, backgroundColor: "#CBD5E1", marginVertical: 2 },
   suggestionsBox: {
     backgroundColor: "#FFFFFF",
@@ -1154,7 +1420,6 @@ const styles = StyleSheet.create({
     borderColor: "#94A3B8",
     alignItems: "center",
     justifyContent: "center",
-    // Les marges sont maintenant gérées dynamiquement selon isRTL dans le JSX
   },
   radioOuterSelected: {
     borderColor: COLORS.primary,

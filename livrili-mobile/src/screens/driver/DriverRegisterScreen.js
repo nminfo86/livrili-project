@@ -24,17 +24,17 @@ import {
   isValidPlate,
   isValidPhoto,
 } from '../../utils/validators';
+import { getCommuneFromCoords } from '../../services/MapService';
 
 export default function DriverRegisterScreen({ navigation }) {
   const { t, isRTL } = useThemeLang();
   const [fullName, setFullName] = useState('');
   const [commune, setCommune] = useState('El Eulma');
   const [gpsLoading, setGpsLoading] = useState(false);
-
   const [transportModes, setTransportModes] = useState([
     { id: 'moto', title_fr: 'Moto', title_ar: 'دراجة نارية', icon: 'moped' },
     { id: 'camionnette', title_fr: 'Chana / Harbin', title_ar: 'شاحنة صغيرة', icon: 'truck-flatbed' },
-    { id: 'fourgon', title_fr: 'Fourgon', title_ar: 'فورغون', icon: 'truck-delivery' },
+    { id: 'fourgon', title_fr: 'Fourgon', title_ar: 'شاحنة', icon: 'truck-delivery' },
   ]);
   const [vehicleType, setVehicleType] = useState('moto');
   const [brand, setBrand] = useState('');
@@ -44,7 +44,6 @@ export default function DriverRegisterScreen({ navigation }) {
   const [photoBase64, setPhotoBase64] = useState(null);
   const [loading, setLoading] = useState(false);
   const [submittedAttempt, setSubmittedAttempt] = useState(false);
-
   const rowDir = isRTL ? 'row-reverse' : 'row';
   const textAlignDir = isRTL ? 'right' : 'left';
 
@@ -65,20 +64,22 @@ export default function DriverRegisterScreen({ navigation }) {
     try {
       let { status } = await Location.requestForegroundPermissionsAsync();
       if (status !== 'granted') return;
-      let loc = await Location.getCurrentPositionAsync({});
-      const res = await fetch(
-        `https://nominatim.openstreetmap.org/reverse?format=json&lat=${loc.coords.latitude}&lon=${loc.coords.longitude}&accept-language=fr`,
-        { headers: { 'User-Agent': 'Mozilla/5.0 LivriliAlgeria/1.0' } }
+
+      let loc = await Location.getCurrentPositionAsync({
+        accuracy: Location.Accuracy.Balanced,
+      });
+
+      // Détection hybride : Google Maps Geocoding si actif, sinon Nominatim
+      const detectedCommune = await getCommuneFromCoords(
+        loc.coords.latitude,
+        loc.coords.longitude
       );
-      const data = await res.json();
-      const detectedFr =
-        data?.address?.city ||
-        data?.address?.town ||
-        data?.address?.village ||
-        data?.address?.municipality ||
-        'El Eulma';
-      setCommune(detectedFr.trim());
+
+      if (detectedCommune) {
+        setCommune(detectedCommune.trim());
+      }
     } catch (e) {
+      console.log('Erreur GPS inscription:', e);
     } finally {
       setGpsLoading(false);
     }
@@ -90,11 +91,9 @@ export default function DriverRegisterScreen({ navigation }) {
         ? await ImagePicker.requestCameraPermissionsAsync()
         : await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (perm.status !== 'granted') return;
-
       const result = fromCamera
         ? await ImagePicker.launchCameraAsync({ quality: 0.5, base64: true, allowsEditing: true })
         : await ImagePicker.launchImageLibraryAsync({ quality: 0.5, base64: true, allowsEditing: true });
-
       if (!result.canceled && result.assets?.[0]) {
         setPhotoUri(result.assets[0].uri);
         setPhotoBase64(`data:image/jpeg;base64,${result.assets[0].base64}`);
@@ -118,11 +117,9 @@ export default function DriverRegisterScreen({ navigation }) {
 
   const handleSubmit = async () => {
     setSubmittedAttempt(true);
-
     if (!nameOk || !communeOk || !brandOk || !colorOk || !plateOk || !photoOk) {
       return;
     }
-
     setLoading(true);
     try {
       const res = await API.post('auth.php?action=upgrade_to_driver', {
@@ -134,7 +131,6 @@ export default function DriverRegisterScreen({ navigation }) {
         plate_number: plate.trim(),
         photo_moto: photoBase64,
       });
-
       if (res.data?.success) {
         Alert.alert('Succès', res.data.message || 'Compte livreur activé !');
         navigation.goBack();
@@ -172,7 +168,7 @@ export default function DriverRegisterScreen({ navigation }) {
           <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errFullName')}</Text>
         )}
 
-        {/* COMMUNE EN FRANÇAIS */}
+        {/* COMMUNE DÉTECTÉE PAR GPS HYBRIDE */}
         <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('communeAutoGps')} *</Text>
         <View style={getFieldBoxStyle(communeOk, commune)}>
           <TextInput
@@ -193,7 +189,7 @@ export default function DriverRegisterScreen({ navigation }) {
           <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errCommune')}</Text>
         )}
 
-        {/* TYPE DE VÉHICULE AVEC ICÔNE MOTO CORRIGÉE */}
+        {/* TYPE DE VÉHICULE */}
         <Text style={[styles.label, { textAlign: textAlignDir }]}>{t('transportModeLabel')} *</Text>
         <View style={[styles.vGrid, { flexDirection: rowDir }]}>
           {transportModes.map((v) => {
@@ -299,7 +295,6 @@ export default function DriverRegisterScreen({ navigation }) {
             <Ionicons name="alert-circle" size={20} color={COLORS.danger} />
           ) : null}
         </View>
-
         <View style={[styles.photoRow, { flexDirection: rowDir }]}>
           <TouchableOpacity
             style={[styles.photoBtn, { flexDirection: rowDir }, submittedAttempt && !photoOk && styles.photoBtnErr]}
@@ -308,7 +303,6 @@ export default function DriverRegisterScreen({ navigation }) {
             <Ionicons name="camera-outline" size={20} color={COLORS.primary} />
             <Text style={styles.photoBtnText}>{t('takePhotoBtn')}</Text>
           </TouchableOpacity>
-
           <TouchableOpacity
             style={[styles.photoBtn, { flexDirection: rowDir }, submittedAttempt && !photoOk && styles.photoBtnErr]}
             onPress={() => pickPhoto(false)}
@@ -317,9 +311,8 @@ export default function DriverRegisterScreen({ navigation }) {
             <Text style={styles.photoBtnText}>{t('galleryBtn')}</Text>
           </TouchableOpacity>
         </View>
-
         {photoUri && <Image source={{ uri: photoUri }} style={styles.previewImg} />}
-        {submittedAttempt && !photoOk && (
+        {(submittedAttempt && !photoOk) && (
           <Text style={[styles.errorText, { textAlign: textAlignDir }]}>{t('errPhoto')}</Text>
         )}
 

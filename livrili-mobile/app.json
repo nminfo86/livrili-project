@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.bouhezila.livrili",
+      "softwareKeyboardLayoutMode": "pan",
       "adaptiveIcon": {
         "backgroundColor": "#1976d2"
       },
