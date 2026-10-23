@@ -39,3 +39,6 @@ yarn-error.*
 # generated native folders
 /ios
 /android
+
+google-services.json
+livrili-e3282-firebase-adminsdk-fbsvc-d11161ff3c.json

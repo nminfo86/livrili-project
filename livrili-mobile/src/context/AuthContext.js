@@ -1,120 +1,145 @@
+// src/context/AuthContext.js
 import React, { createContext, useState, useEffect } from 'react';
 import * as SecureStore from 'expo-secure-store';
-import apiClient from '../api/client';
+import API, { setAuthToken } from '../api/client';
+import {
+  registerForPushNotificationsAsync,
+  unregisterPushNotificationsAsync,
+} from '../services/NotificationService';
 
 export const AuthContext = createContext();
 
 export const AuthProvider = ({ children }) => {
   const [user, setUser] = useState(null);
-  const [token, setToken] = useState(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    loadStoredUser();
+    loadSession();
   }, []);
 
-  const loadStoredUser = async () => {
+  // Dès qu'un utilisateur est authentifié, on enregistre son Expo Push Token sur le serveur
+  useEffect(() => {
+    if (user && user.id) {
+      registerForPushNotificationsAsync();
+    }
+  }, [user?.id]);
+
+  const loadSession = async () => {
     try {
-      const savedToken = await SecureStore.getItemAsync('auth_token');
+      const token = await SecureStore.getItemAsync('auth_token');
       const savedUser = await SecureStore.getItemAsync('user_data');
-      if (savedToken && savedUser) {
-        setToken(savedToken);
-        setUser(JSON.parse(savedUser));
+
+      if (token) {
+        if (typeof setAuthToken === 'function') {
+          setAuthToken(token);
+        } else if (API.defaults?.headers?.common) {
+          API.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        }
+
+        if (savedUser) {
+          try {
+            setUser(JSON.parse(savedUser));
+          } catch (e) {}
+        }
+
+        // Rafraîchir les infos du profil depuis le serveur
+        try {
+          const res = await API.get('auth.php?action=me');
+          if (res.data?.user) {
+            setUser(res.data.user);
+            await SecureStore.setItemAsync('user_data', JSON.stringify(res.data.user));
+          }
+        } catch (err) {
+          // Si le token est expiré (401), on nettoie la session locale
+          if (err.response?.status === 401) {
+            await SecureStore.deleteItemAsync('auth_token');
+            await SecureStore.deleteItemAsync('user_data');
+            setUser(null);
+          }
+        }
       }
-    } catch (e) {
-      console.log('Error loading auth state:', e);
+    } catch (error) {
+      console.log('Erreur chargement session :', error);
     } finally {
       setLoading(false);
     }
   };
 
-  // Sauvegarde sécurisée sans jamais faire planter SecureStore
-  const saveSession = async (authToken, userData) => {
-    const safeToken = String(authToken || '');
-    const safeUser = userData || {};
-    if (safeToken) {
-      await SecureStore.setItemAsync('auth_token', safeToken);
-      await SecureStore.setItemAsync('userToken', safeToken);
+  const login = async (token, userData) => {
+    try {
+      if (token) {
+        await SecureStore.setItemAsync('auth_token', String(token));
+        if (typeof setAuthToken === 'function') {
+          setAuthToken(token);
+        } else if (API.defaults?.headers?.common) {
+          API.defaults.headers.common['Authorization'] = `Bearer ${token}`;
+        }
+      }
+
+      if (userData) {
+        await SecureStore.setItemAsync('user_data', JSON.stringify(userData));
+        setUser(userData);
+      }
+
+      // Enregistrer immédiatement le token de notification Push après connexion
+      await registerForPushNotificationsAsync();
+    } catch (error) {
+      console.log('Erreur login SecureStore :', error);
     }
-    await SecureStore.setItemAsync('user_data', JSON.stringify(safeUser));
-    setToken(safeToken);
-    setUser(safeUser);
   };
 
-  // Supporte à la fois login(token, user) ET login(email, password)
-  const login = async (arg1, arg2) => {
-    // Cas 1 : appelé après un appel API déjà fait -> login(token, user)
-    if (typeof arg2 === 'object' && arg2 !== null) {
-      await saveSession(arg1, arg2);
-      return { success: true, user: arg2 };
-    }
-    // Cas 2 : appelé avec un seul objet -> login({ token, user })
-    if (typeof arg1 === 'object' && arg1 !== null && (arg1.token || arg1.user)) {
-      await saveSession(arg1.token || arg1.auth_token, arg1.user || arg1);
-      return { success: true, user: arg1.user || arg1 };
-    }
-    // Cas 3 : appelé avec (identifier, password) pour faire la requête API
-    const res = await apiClient.post('/auth.php?action=login', {
-      identifier: arg1,
-      email: arg1,
-      phone: arg1,
-      password: arg2,
-    });
-    if (res.data?.token && res.data?.user) {
-      await saveSession(res.data.token, res.data.user);
-    }
-    return res.data;
+  const updateUser = async (updatedFields) => {
+    try {
+      setUser((prev) => {
+        const nextUser = prev ? { ...prev, ...updatedFields } : updatedFields;
+        SecureStore.setItemAsync('user_data', JSON.stringify(nextUser)).catch(() => {});
+        return nextUser;
+      });
+    } catch (e) {}
   };
 
-  // Fonction d'inscription directe
-  const register = async (payload) => {
-    const res = await apiClient.post('/auth.php?action=register', payload);
-    if (res.data?.token && res.data?.user) {
-      await saveSession(res.data.token, res.data.user);
+  const switchMode = async (newMode) => {
+    try {
+      await updateUser({ current_mode: newMode });
+      await API.post('auth.php?action=switch_mode', { mode: newMode });
+    } catch (e) {
+      console.log('Info switchMode :', e.message);
     }
-    return res.data;
-  };
-
-  // Connexion Google
-  const googleLogin = async (googlePayload) => {
-    const res = await apiClient.post('/auth.php?action=google_login', googlePayload);
-    if (res.data?.token && res.data?.user) {
-      await saveSession(res.data.token, res.data.user);
-    }
-    return res.data;
   };
 
   const logout = async () => {
     try {
+      // 1. Détacher le push_token en base de données avant de supprimer le token d'auth
+      await unregisterPushNotificationsAsync();
+    } catch (e) {}
+
+    try {
+      // 2. Nettoyer le stockage sécurisé local
       await SecureStore.deleteItemAsync('auth_token');
       await SecureStore.deleteItemAsync('user_data');
-    } catch (e) {}
-    setToken(null);
-    setUser(null);
-  };
-
-  const switchMode = async (newMode) => {
-    if (!user) return;
-    const updatedUser = { ...user, current_mode: newMode };
-    setUser(updatedUser);
-    try {
-      await SecureStore.setItemAsync('user_data', JSON.stringify(updatedUser));
-      await apiClient.post('/auth.php?action=switch_mode', { mode: newMode }).catch(() => {});
-    } catch (e) {}
+      if (typeof setAuthToken === 'function') {
+        setAuthToken(null);
+      } else if (API.defaults?.headers?.common) {
+        delete API.defaults.headers.common['Authorization'];
+      }
+    } catch (error) {
+      console.log('Erreur logout :', error);
+    } finally {
+      setUser(null);
+    }
   };
 
   return (
     <AuthContext.Provider
       value={{
         user,
-        token,
         setUser,
         loading,
         login,
-        register,
-        googleLogin,
         logout,
+        updateUser,
         switchMode,
+        refreshProfile: loadSession,
       }}
     >
       {children}

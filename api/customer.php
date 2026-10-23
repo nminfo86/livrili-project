@@ -2,6 +2,7 @@
 // api/customer.php
 require_once __DIR__ . '/bootstrap.php';
 require_once dirname(__DIR__) . '/handlers/DispatchService.php';
+require_once __DIR__ . '/push_helper.php';
 
 
 function getAuthenticatedCustomer(PDO $pdo)
@@ -195,6 +196,34 @@ if ($action === 'create_order') {
         ], JSON_UNESCAPED_UNICODE);
     } else {
         echo json_encode(['success' => false, 'error' => 'Erreur lors de l’enregistrement de la commande']);
+        exit;
+    }
+
+    // vehicle_type peut contenir plusieurs types séparés par des virgules (ex: moto,fourgon)
+    $stmtDrivers = $pdo->prepare("
+    SELECT DISTINCT u.push_token 
+    FROM driver_profiles dp
+    INNER JOIN telegram_users u ON u.id = dp.telegram_user_id
+    WHERE dp.is_online = 1 
+      AND dp.verification_status = 'approved'
+      AND FIND_IN_SET(dp.vehicle_type, :vtype)
+      AND u.push_token IS NOT NULL
+");
+    $stmtDrivers->execute([':vtype' => str_replace(' ', '', $vehicleType)]);
+    $driverTokens = $stmtDrivers->fetchAll(PDO::FETCH_COLUMN);
+
+    if (!empty($driverTokens)) {
+        sendExpoPushNotifications(
+            $driverTokens,
+            "📦 Nouvelle course disponible (#$orderCode)",
+            "Départ : $pickupAddress ➔ $deliveryAddress ($estimatedPrice DA)",
+            [
+                'type'       => 'NEW_ORDER_POOL',
+                'screen'     => 'DriverPool',
+                'orderId'    => $newOrderId,
+                'targetRole' => 'driver'
+            ]
+        );
     }
     exit;
 }
@@ -296,8 +325,9 @@ if ($action === 'my_orders') {
             IFNULL(dp.rating, 100.00) AS driver_rating
         FROM parcel_orders po
         LEFT JOIN driver_profiles dp ON po.selected_driver_id = dp.id
-        WHERE po.sender_telegram_id = ? OR po.sender_telegram_id = ?
-        ORDER BY po.created_at DESC
+        WHERE (po.sender_telegram_id = ? OR po.sender_telegram_id = ?)
+          AND (po.status <> 'DELIVERED' OR DATE(po.delivered_at) = CURDATE())
+        ORDER BY (po.status = 'DELIVERED') ASC, po.created_at DESC
         LIMIT 40
     ";
 
@@ -376,6 +406,9 @@ if ($action === 'my_orders') {
             'agreed_fee'           => (float)$order['agreed_fee'],
             'status'               => $order['status'],
             'created_at'           => $order['created_at'],
+            'accepted_at'          => $order['accepted_at'],
+            'picked_up_at'         => $order['picked_up_at'],
+            'delivered_at'         => $order['delivered_at'],
             // Coordonnées et véhicule du coursier assigné
             'driver_name'          => $order['driver_name'],
             'driver_phone'         => $order['driver_phone'],
@@ -440,6 +473,32 @@ if ($action === 'accept_bid') {
         'success' => true,
         'message' => 'Livreur assigné avec succès'
     ]);
+
+    // Récupérer le push_token du livreur sélectionné et le code de la commande
+    $stmtNotifDriver = $pdo->prepare("
+    SELECT u.push_token, po.code, po.pickup_address, po.agreed_fee
+    FROM parcel_orders po
+    INNER JOIN driver_profiles dp ON dp.id = po.selected_driver_id
+    INNER JOIN telegram_users u ON u.id = dp.telegram_user_id
+    WHERE po.id = :order_id
+");
+    $stmtNotifDriver->execute([':order_id' => $orderId]);
+    $notifInfo = $stmtNotifDriver->fetch(PDO::FETCH_ASSOC);
+
+    if ($notifInfo && !empty($notifInfo['push_token'])) {
+        sendExpoPushNotifications(
+            $notifInfo['push_token'],
+            "✅ Votre offre a été acceptée ! (#{$notifInfo['code']})",
+            "Montant : {$notifInfo['agreed_fee']} DA. Rendez-vous au point de départ : {$notifInfo['pickup_address']}",
+            [
+                'type'       => 'BID_ACCEPTED',
+                'screen'     => 'DriverBids',
+                'orderId'    => (int)$orderId,
+                'targetRole' => 'driver'
+            ]
+        );
+    }
+
     exit;
 }
 

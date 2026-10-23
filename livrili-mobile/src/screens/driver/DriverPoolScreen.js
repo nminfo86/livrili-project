@@ -1,5 +1,5 @@
 // src/screens/driver/DriverPoolScreen.js
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useEffect, useRef } from "react";
 import {
   View,
   Text,
@@ -9,28 +9,48 @@ import {
   Alert,
   RefreshControl,
   Linking,
-  Platform,
 } from "react-native";
 import { useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
+import { addNotificationReceivedListener } from "../../services/NotificationService";
 import API from "../../api/client";
 import { useThemeLang, COLORS } from "../../context/ThemeLanguageContext";
 
-export default function DriverPoolScreen() {
+export default function DriverPoolScreen({ route }) {
   const { t, isRTL } = useThemeLang();
+  const flatListRef = useRef(null);
+
   const [orders, setOrders] = useState([]);
   const [driverVType, setDriverVType] = useState("");
   const [refreshing, setRefreshing] = useState(false);
+  const [highlightedOrderId, setHighlightedOrderId] = useState(null);
 
   const rowDir = isRTL ? "row-reverse" : "row";
   const textAlignDir = isRTL ? "right" : "left";
+
+  const focusOrderId = route?.params?.focusOrderId || null;
 
   const loadPool = async () => {
     try {
       const res = await API.get("driver.php?action=pool");
       if (res.data?.success) {
-        setOrders(res.data.pool || []);
+        const list = res.data.pool || [];
+        setOrders(list);
         if (res.data.driver_vtype) setDriverVType(res.data.driver_vtype);
+
+        if (focusOrderId) {
+          setHighlightedOrderId(Number(focusOrderId));
+          const idx = list.findIndex((o) => Number(o.id) === Number(focusOrderId));
+          if (idx >= 0 && flatListRef.current) {
+            setTimeout(() => {
+              flatListRef.current?.scrollToIndex({
+                index: idx,
+                animated: true,
+                viewPosition: 0.1,
+              });
+            }, 300);
+          }
+        }
       } else if (res.data?.error) {
         Alert.alert("Info", res.data.error);
       }
@@ -45,8 +65,20 @@ export default function DriverPoolScreen() {
   useFocusEffect(
     useCallback(() => {
       loadPool();
-    }, []),
+    }, [focusOrderId, route?.params?.timestamp]),
   );
+
+  // Rafraîchir automatiquement le pool quand une notification de nouvelle commande arrive
+  useEffect(() => {
+    const sub = addNotificationReceivedListener((notif) => {
+      const data = notif?.request?.content?.data;
+      if (data?.type === "NEW_ORDER_POOL") {
+        if (data?.orderId) setHighlightedOrderId(Number(data.orderId));
+        loadPool();
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -110,8 +142,10 @@ export default function DriverPoolScreen() {
       ) : null}
 
       <FlatList
+        ref={flatListRef}
         data={orders}
         keyExtractor={(item) => String(item.id)}
+        onScrollToIndexFailed={() => {}}
         refreshControl={
           <RefreshControl
             refreshing={refreshing}
@@ -129,56 +163,60 @@ export default function DriverPoolScreen() {
             <Text style={styles.empty}>{t("emptyPoolMsg")}</Text>
           </View>
         }
-        renderItem={({ item }) => (
-          <View style={styles.card}>
-            <View style={[styles.head, { flexDirection: rowDir }]}>
-              <Text style={styles.code}>
-                #{item.code} ({item.time})
+        renderItem={({ item }) => {
+          const isHighlighted = Number(item.id) === Number(highlightedOrderId);
+          return (
+            <View style={[styles.card, isHighlighted && styles.cardHighlighted]}>
+              <View style={[styles.head, { flexDirection: rowDir }]}>
+                <Text style={styles.code}>
+                  #{item.code} ({item.time})
+                </Text>
+                {Number(item.is_round_trip) === 1 && (
+                  <Text style={styles.roundBadge}>🔄 {t("roundTrip")}</Text>
+                )}
+              </View>
+
+              <Text style={[styles.line, { textAlign: textAlignDir }]}>
+                🟢 {t("pickupLabel")} {item.pickup_address}
               </Text>
-              {Number(item.is_round_trip) === 1 && (
-                <Text style={styles.roundBadge}>🔄 {t("roundTrip")}</Text>
-              )}
+              <Text style={[styles.line, { textAlign: textAlignDir }]}>
+                🔴 {t("arrivalLabel")} {item.delivery_address}
+              </Text>
+              <Text style={[styles.desc, { textAlign: textAlignDir }]}>
+                📦 {item.parcel_description}
+              </Text>
+
+              <Text style={[styles.price, { textAlign: textAlignDir }]}>
+                {t("suggestedPrice")} : {item.estimated_price} DA (~
+                {item.distance_km} km)
+              </Text>
+
+              <TouchableOpacity
+                style={styles.btnMaps}
+                onPress={() =>
+                  openGoogleMapsRoute(
+                    item.pickup_lat,
+                    item.pickup_lon,
+                    item.delivery_lat,
+                    item.delivery_lon,
+                  )
+                }
+              >
+                <Ionicons name="navigate" size={16} color="#2563EB" />
+                <Text style={styles.btnMapsText}>
+                  Voir le trajet sur Google Maps
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.btnBid}
+                onPress={() => handleSendBid(item)}
+              >
+                <Text style={styles.btnBidText}>{t("makeOfferBtn")}</Text>
+              </TouchableOpacity>
             </View>
-
-            <Text style={[styles.line, { textAlign: textAlignDir }]}>
-              📍 {t("pickupLabel")} {item.pickup_address}
-            </Text>
-            <Text style={[styles.line, { textAlign: textAlignDir }]}>
-              🏁 {t("arrivalLabel")} {item.delivery_address}
-            </Text>
-            <Text style={[styles.desc, { textAlign: textAlignDir }]}>
-              📦 {item.parcel_description}
-            </Text>
-            <Text style={[styles.price, { textAlign: textAlignDir }]}>
-              {t("suggestedPrice")} : {item.estimated_price} DA (~
-              {item.distance_km} km)
-            </Text>
-            {/* Bouton pour afficher le trajet sur Google Maps */}
-            <TouchableOpacity
-              style={styles.btnMaps}
-              onPress={() =>
-                openGoogleMapsRoute(
-                  item.pickup_lat,
-                  item.pickup_lon,
-                  item.delivery_lat,
-                  item.delivery_lon,
-                )
-              }
-            >
-              <Ionicons name="navigate" size={16} color="#2563EB" />
-              <Text style={styles.btnMapsText}>
-                Voir le trajet sur Google Maps
-              </Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity
-              style={styles.btnBid}
-              onPress={() => handleSendBid(item)}
-            >
-              <Text style={styles.btnBidText}>{t("makeOfferBtn")}</Text>
-            </TouchableOpacity>
-          </View>
-        )}
+          );
+        }}
       />
     </View>
   );
@@ -217,6 +255,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     elevation: 2,
+  },
+  cardHighlighted: {
+    borderColor: COLORS.primary,
+    borderWidth: 2.5,
+    backgroundColor: "#F0FDF4",
   },
   head: { justifyContent: "space-between", marginBottom: 6 },
   code: { fontWeight: "800", fontSize: 14, color: COLORS.primary },
