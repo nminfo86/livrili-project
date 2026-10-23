@@ -1,15 +1,25 @@
 // src/navigation/AppNavigator.js
-import React, { useContext } from 'react';
-import { View, Text, StyleSheet, ActivityIndicator, Platform } from 'react-native';
+import React, { useContext, useEffect, useRef } from 'react';
+import { ActivityIndicator, View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
-import { Ionicons, Fontisto } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
 
+import API from '../api/client';
 import { AuthContext } from '../context/AuthContext';
-import { useThemeLang, COLORS, FONTS, SHADOWS } from '../context/ThemeLanguageContext';
+import { useThemeLang, COLORS } from '../context/ThemeLanguageContext';
+import {
+  navigationRef,
+  navigateFromNotificationData,
+  consumePendingNotification,
+  addNotificationReceivedListener,
+  addNotificationResponseReceivedListener,
+  getLastNotificationResponseAsync,
+  triggerLocalNotification,
+} from '../services/NotificationService';
 
-// Écrans d'authentification
+// Écrans Auth
 import LoginScreen from '../screens/auth/LoginScreen';
 
 // Écrans Client
@@ -26,224 +36,357 @@ import DriverRegisterScreen from '../screens/driver/DriverRegisterScreen';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
-function WalletPlaceholderScreen() {
-  const { isRTL } = useThemeLang();
-  return (
-    <View style={styles.centered}>
-      <Ionicons name="wallet-outline" size={64} color={COLORS.primary} />
-      <Text style={[styles.placeholderTitle, { textAlign: isRTL ? 'right' : 'left' }]}>
-        {isRTL ? 'المحفظة قريباً' : 'Portefeuille bientôt disponible'}
-      </Text>
-      <Text style={[styles.placeholderSub, { textAlign: isRTL ? 'right' : 'left' }]}>
-        {isRTL ? 'إدارة الأرصدة والمدفوعات' : 'Gestion des soldes et paiements de livraison'}
-      </Text>
-    </View>
-  );
+// Helper qui évite d'afficher le nom brut de la clé (ex: "dashboardTab") si elle manque dans ThemeLanguageContext
+function translateTab(t, isRTL, key, fallbackFr, fallbackAr) {
+  const val = typeof t === 'function' ? t(key) : '';
+  if (val && val !== key) return val;
+  return isRTL ? fallbackAr : fallbackFr;
 }
 
-// ------------------------------------------------------------------
-// 1. NAVIGATION CLIENT (INVERSION NATIVE RTL EN ARABE / DARJA)
-// ------------------------------------------------------------------
-function CustomerTabNavigator() {
-  const { isRTL } = useThemeLang();
-
-  // Définition des onglets
-  const tabScreens = [
-    <Tab.Screen
-      key="home"
-      name="Home"
-      component={NewOrderScreen}
-      options={{
-        tabBarLabel: isRTL ? 'الرئيسية' : 'Accueil',
-        tabBarIcon: ({ color, size }) => <Ionicons name="home" size={size} color={color} />,
-      }}
-    />,
-    <Tab.Screen
-      key="orders"
-      name="Orders"
-      component={OrdersScreen}
-      options={{
-        tabBarLabel: isRTL ? 'طلباتي' : 'Mes Courses',
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name="receipt-outline" size={size} color={color} />
-        ),
-      }}
-    />,
-    <Tab.Screen
-      key="wallet"
-      name="Wallet"
-      component={WalletPlaceholderScreen}
-      options={{
-        tabBarLabel: isRTL ? 'المحفظة' : 'Portefeuille',
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name="wallet-outline" size={size} color={color} />
-        ),
-      }}
-    />,
-    <Tab.Screen
-      key="settings"
-      name="Settings"
-      component={SettingsScreen}
-      options={{
-        tabBarLabel: isRTL ? 'الإعدادات' : 'Paramètres',
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name="settings-outline" size={size} color={color} />
-        ),
-      }}
-    />,
-  ];
+function CustomerTabs() {
+  const { t, isRTL } = useThemeLang();
+  const { user, switchMode } = useContext(AuthContext);
 
   return (
     <Tab.Navigator
-      key={isRTL ? 'customer-tabs-rtl' : 'customer-tabs-ltr'}
-      initialRouteName="Home"
-      screenOptions={{
-        headerShown: false,
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        headerStyle: { backgroundColor: COLORS.primary },
+        headerTintColor: '#FFF',
+        headerTitleStyle: { fontWeight: '800', fontSize: 17 },
         tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: '#94A3B8',
-        tabBarStyle: {
-          backgroundColor: COLORS.white,
-          borderTopWidth: 1,
-          borderTopColor: COLORS.border,
-          height: Platform.OS === 'ios' ? 84 : 64,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
-          paddingTop: 8,
-          ...SHADOWS.card,
+        tabBarInactiveTintColor: '#64748B',
+        tabBarStyle: { height: 62, paddingBottom: 8, paddingTop: 6 },
+        headerRight: () =>
+          user?.role === 'driver' ? (
+            <TouchableOpacity
+              style={styles.switchRoleBtn}
+              onPress={() => switchMode('driver')}
+            >
+              <Ionicons name="bicycle" size={16} color={COLORS.primary} />
+              <Text style={styles.switchRoleText}>
+                {isRTL ? 'وضع السائق' : 'Mode Livreur'}
+              </Text>
+            </TouchableOpacity>
+          ) : null,
+        tabBarIcon: ({ color, size }) => {
+          let iconName = 'cube-outline';
+          if (route.name === 'NewOrder') iconName = 'map-outline';
+          else if (route.name === 'Orders') iconName = 'list-outline';
+          else if (route.name === 'Settings') iconName = 'settings-outline';
+          return <Ionicons name={iconName} size={size} color={color} />;
         },
-        tabBarLabelStyle: {
-          fontFamily: FONTS.bold,
-          fontSize: 11,
-          fontWeight: '800',
-        },
-      }}
+      })}
     >
-      {/* En RTL, la liste est inversée pour que "Accueil" soit placé à l'extrême droite */}
-      {isRTL ? tabScreens.slice().reverse() : tabScreens}
+      <Tab.Screen
+        name="NewOrder"
+        component={NewOrderScreen}
+        options={{
+          headerShown: false,
+          title: translateTab(t, isRTL, 'newOrder', 'Commander', 'طلب توصيل'),
+        }}
+      />
+      <Tab.Screen
+        name="Orders"
+        component={OrdersScreen}
+        options={{
+          title: translateTab(t, isRTL, 'myOrders', 'Mes Commandes', 'طلباتي'),
+        }}
+      />
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{
+          title: translateTab(t, isRTL, 'settings', 'Paramètres', 'الإعدادات'),
+        }}
+      />
     </Tab.Navigator>
   );
 }
 
-// ------------------------------------------------------------------
-// 2. NAVIGATION LIVREUR (INVERSION NATIVE RTL EN ARABE / DARJA)
-// ------------------------------------------------------------------
-function DriverTabNavigator() {
-  const { isRTL } = useThemeLang();
-
-  const driverScreens = [
-    <Tab.Screen
-      key="pool"
-      name="DriverPool"
-      component={DriverPoolScreen}
-      options={{
-        tabBarLabel: isRTL ? 'الطلبات المتاحة' : 'Disponibles',
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name="navigate-circle-outline" size={size} color={color} />
-        ),
-      }}
-    />,
-    <Tab.Screen
-      key="bids"
-      name="DriverBids"
-      component={DriverBidsScreen}
-      options={{
-        tabBarLabel: isRTL ? 'عروضي' : 'Mes Offres',
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name="time-outline" size={size} color={color} />
-        ),
-      }}
-    />,
-    <Tab.Screen
-      key="dashboard"
-      name="DriverDashboard"
-      component={DriverDashboardScreen}
-      options={{
-        tabBarLabel: isRTL ? 'لوحة القيادة' : 'Tableau de bord',
-        tabBarIcon: ({ color }) => (
-          <Fontisto name="motorcycle" size={20} color={color} />
-        ),
-      }}
-    />,
-    <Tab.Screen
-      key="driver-settings"
-      name="DriverSettings"
-      component={SettingsScreen}
-      options={{
-        tabBarLabel: isRTL ? 'الإعدادات' : 'Paramètres',
-        tabBarIcon: ({ color, size }) => (
-          <Ionicons name="settings-outline" size={size} color={color} />
-        ),
-      }}
-    />,
-  ];
+function DriverTabs() {
+  const { t, isRTL } = useThemeLang();
+  const { switchMode } = useContext(AuthContext);
 
   return (
     <Tab.Navigator
-      key={isRTL ? 'driver-tabs-rtl' : 'driver-tabs-ltr'}
-      initialRouteName="DriverPool"
-      screenOptions={{
-        headerShown: false,
+      screenOptions={({ route }) => ({
+        headerShown: true,
+        headerStyle: { backgroundColor: COLORS.primary },
+        headerTintColor: '#FFF',
+        headerTitleStyle: { fontWeight: '800', fontSize: 17 },
         tabBarActiveTintColor: COLORS.primary,
-        tabBarInactiveTintColor: '#94A3B8',
-        tabBarStyle: {
-          backgroundColor: COLORS.white,
-          borderTopWidth: 1,
-          borderTopColor: COLORS.border,
-          height: Platform.OS === 'ios' ? 84 : 64,
-          paddingBottom: Platform.OS === 'ios' ? 24 : 8,
-          paddingTop: 8,
-          ...SHADOWS.card,
+        tabBarInactiveTintColor: '#64748B',
+        tabBarStyle: { height: 62, paddingBottom: 8, paddingTop: 6 },
+        headerRight: () => (
+          <TouchableOpacity
+            style={styles.switchRoleBtn}
+            onPress={() => switchMode('customer')}
+          >
+            <Ionicons name="person" size={15} color={COLORS.primary} />
+            <Text style={styles.switchRoleText}>
+              {isRTL ? 'وضع الزبون' : 'Mode Client'}
+            </Text>
+          </TouchableOpacity>
+        ),
+        tabBarIcon: ({ color, size }) => {
+          let iconName = 'speedometer-outline';
+          if (route.name === 'DriverDashboard') iconName = 'speedometer-outline';
+          else if (route.name === 'DriverPool') iconName = 'navigate-circle-outline';
+          else if (route.name === 'DriverBids') iconName = 'pricetag-outline';
+          else if (route.name === 'Settings') iconName = 'settings-outline';
+          return <Ionicons name={iconName} size={size} color={color} />;
         },
-        tabBarLabelStyle: {
-          fontFamily: FONTS.bold,
-          fontSize: 11,
-          fontWeight: '800',
-        },
-      }}
+      })}
     >
-      {isRTL ? driverScreens.slice().reverse() : driverScreens}
+      <Tab.Screen
+        name="DriverDashboard"
+        component={DriverDashboardScreen}
+        options={{
+          title: translateTab(t, isRTL, 'driverSpaceTitle', 'Tableau de bord', 'لوحة القيادة'),
+        }}
+      />
+      <Tab.Screen
+        name="DriverPool"
+        component={DriverPoolScreen}
+        options={{
+          title: translateTab(t, isRTL, 'availableOrders', 'Courses dispo', 'الطلبات المتاحة'),
+        }}
+      />
+      <Tab.Screen
+        name="DriverBids"
+        component={DriverBidsScreen}
+        options={{
+          title: translateTab(t, isRTL, 'myBids', 'Mes offres', 'عروضي'),
+        }}
+      />
+      <Tab.Screen
+        name="Settings"
+        component={SettingsScreen}
+        options={{
+          title: translateTab(t, isRTL, 'settings', 'Paramètres', 'الإعدادات'),
+        }}
+      />
     </Tab.Navigator>
   );
 }
 
-// ------------------------------------------------------------------
-// 3. NAVIGATEUR PRINCIPAL
-// ------------------------------------------------------------------
 export default function AppNavigator() {
-  const { user, loading } = useContext(AuthContext);
+  const { user, loading, setUser } = useContext(AuthContext);
+  const { isRTL } = useThemeLang();
+  const notificationListener = useRef();
+  const responseListener = useRef();
+
+  // Mémoire des états connus pour déclencher une notification locale dès qu'un changement survient en BDD
+  const knownStateRef = useRef({
+    initialized: false,
+    orderStatuses: {}, // { [orderId]: status }
+    orderBidCounts: {}, // { [orderId]: count }
+    poolOrderIds: new Set(),
+    driverBidStatuses: {}, // { [bidId]: status }
+  });
+
+  const handleRoleSwitchIfNeeded = (targetRole) => {
+    if (!user || !targetRole) return;
+    const currentMode = user.current_mode || user.role || 'customer';
+    if (targetRole !== currentMode && typeof setUser === 'function') {
+      setUser((prev) => (prev ? { ...prev, current_mode: targetRole } : prev));
+    }
+  };
+
+  useEffect(() => {
+    if (!user) return;
+
+    getLastNotificationResponseAsync().then((response) => {
+      const data = response?.notification?.request?.content?.data;
+      if (data) {
+        navigateFromNotificationData(data, handleRoleSwitchIfNeeded);
+      }
+    });
+
+    notificationListener.current = addNotificationReceivedListener(() => {});
+
+    responseListener.current = addNotificationResponseReceivedListener((response) => {
+      const data = response?.notification?.request?.content?.data;
+      if (data) {
+        navigateFromNotificationData(data, handleRoleSwitchIfNeeded);
+      }
+    });
+
+    return () => {
+      if (notificationListener.current) notificationListener.current.remove();
+      if (responseListener.current) responseListener.current.remove();
+    };
+  }, [user?.id]);
+
+  // Surveillance temps réel (Polling léger toutes les 8s) pour déclencher les notifications même sans Firebase
+  useEffect(() => {
+    if (!user?.id) return;
+
+    const checkUpdates = async () => {
+      const mem = knownStateRef.current;
+      const isFirstRun = !mem.initialized;
+
+      // 1. Vérifier les commandes du client (offres reçues & changements de statut)
+      try {
+        const resCust = await API.get('customer.php?action=my_orders');
+        if (resCust.data?.success && Array.isArray(resCust.data.orders)) {
+          for (const ord of resCust.data.orders) {
+            const oid = Number(ord.id);
+            const bidCount = Array.isArray(ord.bids) ? ord.bids.length : 0;
+
+            if (!isFirstRun) {
+              // Nouvelle offre reçue d'un livreur
+              if (
+                typeof mem.orderBidCounts[oid] === 'number' &&
+                bidCount > mem.orderBidCounts[oid]
+              ) {
+                const latestBid = ord.bids[0];
+                await triggerLocalNotification(
+                  `🛵 Nouvelle offre (#${ord.code})`,
+                  `Un livreur propose ${latestBid?.bid_amount || ''} DA pour votre course. Appuyez pour voir.`,
+                  {
+                    type: 'NEW_BID',
+                    screen: 'Orders',
+                    orderId: oid,
+                    targetRole: 'customer',
+                  }
+                );
+              }
+
+              // Changement de statut (DRIVER_ASSIGNED, PICKED_UP, DELIVERED)
+              if (mem.orderStatuses[oid] && mem.orderStatuses[oid] !== ord.status) {
+                if (ord.status === 'PICKED_UP') {
+                  await triggerLocalNotification(
+                    `📦 Colis récupéré (#${ord.code})`,
+                    `Le livreur a récupéré votre colis et est en route vers la destination.`,
+                    {
+                      type: 'ORDER_STATUS_CHANGED',
+                      screen: 'Orders',
+                      orderId: oid,
+                      targetRole: 'customer',
+                    }
+                  );
+                } else if (ord.status === 'DELIVERED') {
+                  await triggerLocalNotification(
+                    `🎉 Colis livré (#${ord.code})`,
+                    `Votre commande #${ord.code} a été livrée avec succès !`,
+                    {
+                      type: 'ORDER_STATUS_CHANGED',
+                      screen: 'Orders',
+                      orderId: oid,
+                      targetRole: 'customer',
+                    }
+                  );
+                }
+              }
+            }
+
+            mem.orderBidCounts[oid] = bidCount;
+            mem.orderStatuses[oid] = ord.status;
+          }
+        }
+      } catch (e) {}
+
+      // 2. Si l'utilisateur possède un profil livreur, vérifier le Pool et ses Offres
+      if (user.role === 'driver' || user.current_mode === 'driver') {
+        try {
+          const resPool = await API.get('driver.php?action=pool');
+          if (resPool.data?.success && Array.isArray(resPool.data.pool)) {
+            for (const p of resPool.data.pool) {
+              const pid = Number(p.id);
+              if (!isFirstRun && !mem.poolOrderIds.has(pid)) {
+                await triggerLocalNotification(
+                  `📦 Nouvelle course disponible (#${p.code})`,
+                  `${p.pickup_address} ➔ ${p.delivery_address} (${p.estimated_price} DA)`,
+                  {
+                    type: 'NEW_ORDER_POOL',
+                    screen: 'DriverPool',
+                    orderId: pid,
+                    targetRole: 'driver',
+                  }
+                );
+              }
+              mem.poolOrderIds.add(pid);
+            }
+          }
+        } catch (e) {}
+
+        try {
+          const resBids = await API.get('driver.php?action=driver_bids');
+          if (resBids.data?.success && Array.isArray(resBids.data.bids)) {
+            for (const b of resBids.data.bids) {
+              const bidId = Number(b.bid_id || b.id);
+              const orderId = Number(b.order_id || b.parcel_order_id);
+              if (
+                !isFirstRun &&
+                mem.driverBidStatuses[bidId] &&
+                mem.driverBidStatuses[bidId] !== 'accepted' &&
+                b.bid_status === 'accepted'
+              ) {
+                await triggerLocalNotification(
+                  `✅ Offre acceptée (#${b.code}) !`,
+                  `Le client a accepté votre offre à ${b.bid_amount} DA. Appuyez pour voir les détails.`,
+                  {
+                    type: 'BID_ACCEPTED',
+                    screen: 'DriverBids',
+                    orderId: orderId,
+                    targetRole: 'driver',
+                  }
+                );
+              }
+              mem.driverBidStatuses[bidId] = b.bid_status;
+            }
+          }
+        } catch (e) {}
+      }
+
+      mem.initialized = true;
+    };
+
+    checkUpdates();
+    const interval = setInterval(checkUpdates, 8000);
+    return () => clearInterval(interval);
+  }, [user?.id, user?.role, user?.current_mode]);
 
   if (loading) {
     return (
-      <View style={styles.loadingContainer}>
+      <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
         <ActivityIndicator size="large" color={COLORS.primary} />
       </View>
     );
   }
 
-  const isDriverMode = user && user.current_mode === 'driver';
+  const isDriverMode =
+    user && (user.current_mode === 'driver' || (!user.current_mode && user.role === 'driver'));
 
   return (
-    <NavigationContainer>
-      <Stack.Navigator screenOptions={{ headerShown: false, animation: 'fade' }}>
+    <NavigationContainer
+      ref={navigationRef}
+      onReady={() => {
+        if (user) {
+          consumePendingNotification(handleRoleSwitchIfNeeded);
+        }
+      }}
+    >
+      <Stack.Navigator screenOptions={{ headerShown: false }}>
         {!user ? (
-          <>
-            <Stack.Screen name="Login" component={LoginScreen} />
-          </>
-        ) : isDriverMode ? (
-          <>
-            <Stack.Screen name="DriverTabs" component={DriverTabNavigator} />
-            <Stack.Screen
-              name="DriverRegister"
-              component={DriverRegisterScreen}
-              options={{ animation: 'slide_from_bottom' }}
-            />
-          </>
+          <Stack.Screen name="Login" component={LoginScreen} />
         ) : (
           <>
-            <Stack.Screen name="CustomerTabs" component={CustomerTabNavigator} />
+            <Stack.Screen
+              name="MainTabs"
+              component={isDriverMode ? DriverTabs : CustomerTabs}
+            />
             <Stack.Screen
               name="DriverRegister"
               component={DriverRegisterScreen}
-              options={{ animation: 'slide_from_bottom' }}
+              options={{
+                headerShown: true,
+                title: isRTL ? 'التسجيل كسائق' : 'Devenir Livreur',
+                headerStyle: { backgroundColor: COLORS.primary },
+                headerTintColor: '#FFF',
+              }}
             />
           </>
         )}
@@ -253,30 +396,19 @@ export default function AppNavigator() {
 }
 
 const styles = StyleSheet.create({
-  loadingContainer: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-    justifyContent: 'center',
+  switchRoleBtn: {
+    flexDirection: 'row',
     alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 20,
+    marginRight: 12,
   },
-  centered: {
-    flex: 1,
-    backgroundColor: COLORS.background,
-    justifyContent: 'center',
-    alignItems: 'center',
-    padding: 20,
-  },
-  placeholderTitle: {
-    fontFamily: FONTS.bold,
-    fontSize: 18,
-    fontWeight: '900',
-    color: COLORS.textDark,
-    marginTop: 14,
-  },
-  placeholderSub: {
-    fontFamily: FONTS.medium,
-    fontSize: 13,
-    color: COLORS.textMuted,
-    marginTop: 4,
+  switchRoleText: {
+    color: COLORS.primary,
+    fontWeight: '800',
+    fontSize: 12,
+    marginLeft: 5,
   },
 });

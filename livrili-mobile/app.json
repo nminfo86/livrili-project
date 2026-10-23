@@ -12,6 +12,7 @@
     },
     "android": {
       "package": "com.bouhezila.livrili",
+      "googleServicesFile": "./google-services.json",
       "softwareKeyboardLayoutMode": "pan",
       "adaptiveIcon": {
         "backgroundColor": "#1976d2"
@@ -27,7 +28,18 @@
     "plugins": [
       "expo-secure-store",
       "expo-status-bar",
-      "expo-web-browser"
-    ]
+      "expo-web-browser",
+      [
+        "expo-notifications",
+        {
+          "color": "#006233"
+        }
+      ]
+    ],
+    "extra": {
+      "eas": {
+        "projectId": "e4788ddc-be9f-4a4a-8a99-7ca909eb8ea4"
+      }
+    }
   }
 }

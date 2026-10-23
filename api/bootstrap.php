@@ -14,6 +14,7 @@ date_default_timezone_set('Africa/Algiers');
 
 require_once dirname(__DIR__) . '/config/config.php';
 require_once dirname(__DIR__) . '/config/Connection.php';
+require_once __DIR__ . '/push_helper.php';
 
 try {
     $pdo = Connection::getPDO();
@@ -67,30 +68,5 @@ function requireAuth(PDO $pdo): array {
  * Envoie une notification push native sur le smartphone (Android / iOS) via Expo
  */
 function sendPushNotification(?string $expoPushToken, string $title, string $body, array $extraData = []): bool {
-    if (empty($expoPushToken) || !str_starts_with($expoPushToken, 'ExponentPushToken')) {
-        return false;
-    }
-
-    $payload = [
-        'to'       => $expoPushToken,
-        'sound'    => 'default',
-        'title'    => $title,
-        'body'     => $body,
-        'priority' => 'high',
-        'data'     => $extraData
-    ];
-
-    $ch = curl_init('https://exp.host/--/api/v2/push/send');
-    curl_setopt($ch, CURLOPT_POST, true);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-    curl_setopt($ch, CURLOPT_HTTPHEADER, [
-        'Content-Type: application/json',
-        'Accept: application/json'
-    ]);
-    curl_setopt($ch, CURLOPT_TIMEOUT, 3);
-    $res = curl_exec($ch);
-    curl_close($ch);
-
-    return $res !== false;
+    return sendExpoPushNotifications($expoPushToken, $title, $body, $extraData) !== false;
 }

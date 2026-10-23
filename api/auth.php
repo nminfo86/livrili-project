@@ -1,6 +1,7 @@
 <?php
 // api/auth.php
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/push_helper.php';
 
 $action = $_GET['action'] ?? '';
 $input = getJsonInput();
@@ -217,6 +218,7 @@ if ($action === 'send_otp') {
     ]);
     exit;
 }
+
 
 // 1. DEMANDE DE RÉINITIALISATION DE MOT DE PASSE (Envoi OTP à 6 chiffres)
 if ($action === 'forgot_password') {
@@ -537,6 +539,7 @@ if ($action === 'verify_otp') {
         'token'   => $authToken,
         'user'    => [
             'id'           => (int)$user['id'],
+            'full_name'    => $user['full_name'],
             'phone'        => $user['phone'],
             'email'        => $user['email'],
             'role'         => $user['role'],
@@ -563,6 +566,7 @@ if ($action === 'me') {
         'success' => true,
         'user'    => [
             'id'           => (int)$user['id'],
+            'full_name'    => $user['full_name'],
             'phone'        => $user['phone'],
             'email'        => $user['email'],
             'role'         => $user['role'],
@@ -599,17 +603,22 @@ if ($action === 'switch_mode') {
 // -------------------------------------------------------------------------
 // ENREGISTREMENT DU TOKEN NOTIFICATION PUSH DU SMARTPHONE
 // -------------------------------------------------------------------------
+
 if ($action === 'save_push_token') {
-    $user = requireAuth($pdo);
-    $pushToken = trim($input['push_token'] ?? '');
+    // $user correspond à l'utilisateur authentifié via le Bearer Token
+     $user = requireAuth($pdo);
 
-    if (!empty($pushToken)) {
-        $stmt = $pdo->prepare("UPDATE telegram_users SET push_token = :token WHERE id = :id");
-        $stmt->execute(['token' => $pushToken, 'id' => $user['id']]);
-        jsonResponse(['success' => true]);
-    }
+    $input = json_decode(file_get_contents('php://input'), true);
+    $pushToken = isset($input['push_token']) ? trim($input['push_token']) : null;
 
-    jsonResponse(['success' => false, 'error' => 'Token manquant']);
+    $stmt = $pdo->prepare("UPDATE telegram_users SET push_token = :token WHERE id = :id");
+    $stmt->execute([
+        ':token' => $pushToken,
+        ':id'    => $user['id']
+    ]);
+
+    echo json_encode(['success' => true]);
+    exit;
 }
 
 // -------------------------------------------------------------------------

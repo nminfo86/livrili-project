@@ -298,7 +298,12 @@ class DispatchService
                     $drv['push_token'],
                     "📦 Nouvelle course disponible !",
                     "Départ : {$parcel['pickup_address']} ({$parcel['estimated_price']} DA)",
-                    ['type' => 'new_order', 'order_id' => $parcel_id]
+                    [
+                        'type'       => 'NEW_ORDER_POOL',
+                        'screen'     => 'DriverPool',
+                        'orderId'    => (int)$parcel_id,
+                        'targetRole' => 'driver',
+                    ]
                 );
             }
         }

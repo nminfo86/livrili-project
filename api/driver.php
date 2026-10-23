@@ -1,9 +1,11 @@
 <?php
 // api/driver.php
 require_once __DIR__ . '/bootstrap.php';
+require_once __DIR__ . '/push_helper.php';
 
 // Fonction de vérification d'authentification robuste (Headers Apache, GET, POST, JSON)
-function getAuthenticatedUser(PDO $pdo) {
+function getAuthenticatedUser(PDO $pdo)
+{
     $token = '';
 
     // 1. Chercher dans les Headers HTTP
@@ -285,7 +287,8 @@ if ($action === 'driver_bids') {
             JOIN telegram_users tu ON po.sender_telegram_id = tu.id
             WHERE pb.driver_id = :did
               AND pb.created_at >= (NOW() - INTERVAL 24 HOUR)
-            ORDER BY pb.id DESC";
+              AND (po.status <> 'DELIVERED' OR DATE(po.delivered_at) = CURDATE())
+            ORDER BY (po.status = 'DELIVERED') ASC, pb.id DESC";
 
     $stmt = $pdo->prepare($sql);
     $stmt->execute(['did' => $driver['id']]);
@@ -335,21 +338,28 @@ if ($action === 'submit_bid') {
             ->execute(['oid' => $orderId, 'did' => $driver['id'], 'amt' => $amount]);
     }
 
+    // sender_telegram_id stocke soit telegram_users.id soit telegram_users.telegram_id
     $stmtClient = $pdo->prepare("
-        SELECT tu.push_token 
+        SELECT u.push_token, po.code 
         FROM parcel_orders po
-        JOIN telegram_users tu ON po.sender_telegram_id = tu.id
-        WHERE po.id = :oid
+        INNER JOIN telegram_users u ON (u.id = po.sender_telegram_id OR u.telegram_id = po.sender_telegram_id)
+        WHERE po.id = :order_id
+        LIMIT 1
     ");
-    $stmtClient->execute(['oid' => $orderId]);
-    $clientToken = $stmtClient->fetchColumn();
+    $stmtClient->execute([':order_id' => $orderId]);
+    $clientInfo = $stmtClient->fetch(PDO::FETCH_ASSOC);
 
-    if ($clientToken && function_exists('sendPushNotification')) {
-        sendPushNotification(
-            $clientToken,
-            "💵 Nouvelle offre de prix reçue !",
-            "Un chauffeur propose {$amount} DA pour votre course.",
-            ['type' => 'new_bid', 'order_id' => $orderId]
+    if ($clientInfo && !empty($clientInfo['push_token'])) {
+        sendExpoPushNotifications(
+            $clientInfo['push_token'],
+            "🛵 Nouvelle offre pour votre commande #{$clientInfo['code']}",
+            "Un livreur propose de livrer votre colis pour {$amount} DA. Appuyez pour voir.",
+            [
+                'type'       => 'NEW_BID',
+                'screen'     => 'Orders',
+                'orderId'    => (int)$orderId,
+                'targetRole' => 'customer'
+            ]
         );
     }
 
@@ -382,7 +392,42 @@ if ($action === 'update_step') {
     } elseif ($step === 'DELIVERED') {
         $pdo->prepare("UPDATE parcel_orders SET status = 'DELIVERED', delivered_at = NOW() WHERE id = :oid AND selected_driver_id = :did")
             ->execute(['oid' => $orderId, 'did' => $driver['id']]);
+    } else {
+        jsonResponse(['success' => true]);
     }
+
+    $stmtClient = $pdo->prepare("
+    SELECT u.push_token, po.code 
+    FROM parcel_orders po
+    INNER JOIN telegram_users u ON (u.id = po.sender_telegram_id OR u.telegram_id = po.sender_telegram_id)
+    WHERE po.id = :order_id
+    LIMIT 1
+");
+    $stmtClient->execute([':order_id' => $orderId]);
+    $clientInfo = $stmtClient->fetch(PDO::FETCH_ASSOC);
+
+    if ($clientInfo && !empty($clientInfo['push_token'])) {
+        $title = ($step === 'PICKED_UP')
+            ? "📦 Colis récupéré (#{$clientInfo['code']})"
+            : "🎉 Colis livré avec succès (#{$clientInfo['code']})";
+        $body = ($step === 'PICKED_UP')
+            ? "Le livreur a récupéré votre colis et est en route vers la destination."
+            : "Votre commande #{$clientInfo['code']} a bien été livrée. Merci d'avoir utilisé Livrili !";
+
+        sendExpoPushNotifications(
+            $clientInfo['push_token'],
+            $title,
+            $body,
+            [
+                'type'       => 'ORDER_STATUS_CHANGED',
+                'screen'     => 'Orders',
+                'orderId'    => (int)$orderId,
+                'status'     => $step,
+                'targetRole' => 'customer'
+            ]
+        );
+    }
+
     jsonResponse(['success' => true]);
 }
 

@@ -1,5 +1,5 @@
 // src/screens/driver/DriverBidsScreen.js
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import {
   View,
   Text,
@@ -12,24 +12,47 @@ import {
   Linking,
 } from 'react-native';
 import { useFocusEffect } from '@react-navigation/native';
-import { Ionicons, MaterialCommunityIcons } from '@expo/vector-icons';
+import { Ionicons } from '@expo/vector-icons';
+import { addNotificationReceivedListener } from '../../services/NotificationService';
 import API from '../../api/client';
 import { useThemeLang, COLORS } from '../../context/ThemeLanguageContext';
 
-export default function DriverBidsScreen() {
+export default function DriverBidsScreen({ route }) {
   const { t, isRTL } = useThemeLang();
+  const flatListRef = useRef(null);
+
   const [bids, setBids] = useState([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [highlightedOrderId, setHighlightedOrderId] = useState(null);
 
   const rowDir = isRTL ? 'row-reverse' : 'row';
   const textAlignDir = isRTL ? 'right' : 'left';
+
+  const focusOrderId = route?.params?.focusOrderId || null;
 
   const fetchDriverBids = async () => {
     try {
       const res = await API.get('driver.php?action=driver_bids');
       if (res.data?.success) {
-        setBids(res.data.bids || []);
+        const list = res.data.bids || [];
+        setBids(list);
+
+        if (focusOrderId) {
+          setHighlightedOrderId(Number(focusOrderId));
+          const idx = list.findIndex(
+            (b) => Number(b.order_id || b.parcel_order_id) === Number(focusOrderId)
+          );
+          if (idx >= 0 && flatListRef.current) {
+            setTimeout(() => {
+              flatListRef.current?.scrollToIndex({
+                index: idx,
+                animated: true,
+                viewPosition: 0.1,
+              });
+            }, 300);
+          }
+        }
       }
     } catch (e) {
       console.log('Error fetching bids:', e);
@@ -42,8 +65,20 @@ export default function DriverBidsScreen() {
   useFocusEffect(
     useCallback(() => {
       fetchDriverBids();
-    }, [])
+    }, [focusOrderId, route?.params?.timestamp])
   );
+
+  // Rafraîchir automatiquement si l'offre est acceptée pendant que l'écran est ouvert
+  useEffect(() => {
+    const sub = addNotificationReceivedListener((notif) => {
+      const data = notif?.request?.content?.data;
+      if (data?.type === 'BID_ACCEPTED') {
+        if (data?.orderId) setHighlightedOrderId(Number(data.orderId));
+        fetchDriverBids();
+      }
+    });
+    return () => sub.remove();
+  }, []);
 
   const updateOrderStep = async (orderId, step) => {
     try {
@@ -52,7 +87,10 @@ export default function DriverBidsScreen() {
         step: step,
       });
       if (res.data?.success) {
-        Alert.alert('Succès', step === 'PICKED_UP' ? 'Colis récupéré !' : 'Course livrée avec succès !');
+        Alert.alert(
+          'Succès',
+          step === 'PICKED_UP' ? 'Colis récupéré !' : 'Course livrée avec succès !'
+        );
         fetchDriverBids();
       }
     } catch (e) {
@@ -62,16 +100,16 @@ export default function DriverBidsScreen() {
 
   const getBidBadge = (status, orderStatus) => {
     if (orderStatus === 'DELIVERED') {
-      return { label: '✓ Livré', bg: '#D1FAE5', color: '#059669' };
+      return { label: '✅ Livré', bg: '#D1FAE5', color: '#059669' };
     }
     if (orderStatus === 'PICKED_UP') {
       return { label: '📦 Colis récupéré', bg: '#E0E7FF', color: '#4F46E5' };
     }
     if (status === 'accepted' || orderStatus === 'DRIVER_ASSIGNED') {
-      return { label: '✓ Acceptée par le client', bg: COLORS.primaryLight, color: COLORS.primary };
+      return { label: '🎉 Acceptée par le client', bg: COLORS.primaryLight, color: COLORS.primary };
     }
     if (status === 'rejected') {
-      return { label: '✕ Refusée', bg: '#FEE2E2', color: '#DC2626' };
+      return { label: '❌ Refusée', bg: '#FEE2E2', color: '#DC2626' };
     }
     return { label: '⏳ En attente de réponse', bg: '#FEF3C7', color: '#D97706' };
   };
@@ -82,8 +120,10 @@ export default function DriverBidsScreen() {
         <ActivityIndicator size="large" color={COLORS.primary} style={{ marginTop: 40 }} />
       ) : (
         <FlatList
+          ref={flatListRef}
           data={bids}
-          keyExtractor={(item) => String(item.bid_id)}
+          keyExtractor={(item) => String(item.bid_id || item.id)}
+          onScrollToIndexFailed={() => {}}
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -103,10 +143,16 @@ export default function DriverBidsScreen() {
           }
           renderItem={({ item }) => {
             const badge = getBidBadge(item.bid_status, item.order_status);
-           const isAccepted = (item.bid_status === 'accepted' || item.order_status === 'DRIVER_ASSIGNED' || item.order_status === 'PICKED_UP') && item.order_status !== 'DELIVERED';
+            const isAccepted =
+              (item.bid_status === 'accepted' ||
+                item.order_status === 'DRIVER_ASSIGNED' ||
+                item.order_status === 'PICKED_UP') &&
+              item.order_status !== 'DELIVERED';
+            const isHighlighted =
+              Number(item.order_id || item.parcel_order_id) === Number(highlightedOrderId);
 
             return (
-              <View style={styles.card}>
+              <View style={[styles.card, isHighlighted && styles.cardHighlighted]}>
                 <View style={[styles.cardHead, { flexDirection: rowDir }]}>
                   <Text style={styles.code}>#{item.code}</Text>
                   <View style={[styles.badge, { backgroundColor: badge.bg }]}>
@@ -115,16 +161,15 @@ export default function DriverBidsScreen() {
                 </View>
 
                 <Text style={[styles.line, { textAlign: textAlignDir }]}>
-                  📍 Départ : {item.pickup_address}
+                  🟢 Départ : {item.pickup_address}
                 </Text>
                 <Text style={[styles.line, { textAlign: textAlignDir }]}>
-                  🏁 Arrivée : {item.delivery_address}
+                  🔴 Arrivée : {item.delivery_address}
                 </Text>
                 <Text style={[styles.price, { textAlign: textAlignDir }]}>
                   Votre offre : <Text style={{ fontWeight: '900' }}>{item.bid_amount} DA</Text>
                 </Text>
 
-                {/* Si le client a accepté, afficher les actions de livraison et contact client */}
                 {isAccepted && (
                   <View style={styles.acceptedBox}>
                     <Text style={[styles.clientInfo, { textAlign: textAlignDir }]}>
@@ -153,7 +198,7 @@ export default function DriverBidsScreen() {
                         style={[styles.stepBtn, { backgroundColor: '#059669' }]}
                         onPress={() => updateOrderStep(item.order_id, 'DELIVERED')}
                       >
-                        <Text style={styles.stepBtnText}>Marquer Cours Livrée / Terminée</Text>
+                        <Text style={styles.stepBtnText}>Marquer Course Livrée / Terminée</Text>
                       </TouchableOpacity>
                     )}
                   </View>
@@ -179,6 +224,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: COLORS.border,
     elevation: 2,
+  },
+  cardHighlighted: {
+    borderColor: COLORS.primary,
+    borderWidth: 2.5,
+    backgroundColor: '#F0FDF4',
   },
   cardHead: { justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 },
   code: { fontWeight: '800', fontSize: 14, color: COLORS.primary },
