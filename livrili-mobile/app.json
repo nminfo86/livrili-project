@@ -6,6 +6,7 @@
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
+    "scheme": "com.bouhezila.livrili",
     "splash": {
       "resizeMode": "contain",
       "backgroundColor": "#1976d2"

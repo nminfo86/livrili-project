@@ -1,13 +1,15 @@
 // src/navigation/AppNavigator.js
-import React, { useContext, useEffect, useRef } from 'react';
+import React, { useCallback, useContext, useEffect, useRef, useState } from 'react';
 import { ActivityIndicator, View, TouchableOpacity, Text, StyleSheet } from 'react-native';
 import { NavigationContainer } from '@react-navigation/native';
 import { createNativeStackNavigator } from '@react-navigation/native-stack';
 import { createBottomTabNavigator } from '@react-navigation/bottom-tabs';
 import { Ionicons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 
 import API from '../api/client';
 import { AuthContext } from '../context/AuthContext';
+import { UnreadContext } from '../context/UnreadContext';
 import { useThemeLang, COLORS } from '../context/ThemeLanguageContext';
 import {
   navigationRef,
@@ -16,7 +18,6 @@ import {
   addNotificationReceivedListener,
   addNotificationResponseReceivedListener,
   getLastNotificationResponseAsync,
-  triggerLocalNotification,
 } from '../services/NotificationService';
 
 // Écrans Auth
@@ -26,6 +27,7 @@ import LoginScreen from '../screens/auth/LoginScreen';
 import NewOrderScreen from '../screens/customer/NewOrderScreen';
 import OrdersScreen from '../screens/customer/OrdersScreen';
 import SettingsScreen from '../screens/customer/SettingsScreen';
+import NotificationsScreen from '../screens/common/NotificationsScreen';
 
 // Écrans Livreur
 import DriverDashboardScreen from '../screens/driver/DriverDashboardScreen';
@@ -36,6 +38,18 @@ import DriverRegisterScreen from '../screens/driver/DriverRegisterScreen';
 const Stack = createNativeStackNavigator();
 const Tab = createBottomTabNavigator();
 
+// Mis à true quand on passe en mode client : les onglets client s'ouvrent alors sur Paramètres
+let openSettingsOnMount = false;
+
+function selectMode(current, mode, switchMode) {
+  if (mode === current) {
+    if (mode === 'customer' && navigationRef.isReady()) navigationRef.navigate('Settings');
+    return;
+  }
+  if (mode === 'customer') openSettingsOnMount = true;
+  switchMode(mode);
+}
+
 // Helper qui évite d'afficher le nom brut de la clé (ex: "dashboardTab") si elle manque dans ThemeLanguageContext
 function translateTab(t, isRTL, key, fallbackFr, fallbackAr) {
   const val = typeof t === 'function' ? t(key) : '';
@@ -43,12 +57,49 @@ function translateTab(t, isRTL, key, fallbackFr, fallbackAr) {
   return isRTL ? fallbackAr : fallbackFr;
 }
 
+// Sélecteur de mode : le segment actif correspond au mode courant, un appui bascule vers l'autre
+function ModeSwitch({ current, onSelect, isRTL }) {
+  const options = [
+    { key: 'customer', label: isRTL ? 'زبون' : 'Client', icon: 'person' },
+    { key: 'driver', label: isRTL ? 'سائق' : 'Livreur', icon: 'bicycle' },
+  ];
+
+  return (
+    <View style={styles.modeSwitch}>
+      {options.map((opt) => {
+        const active = current === opt.key;
+        return (
+          <TouchableOpacity
+            key={opt.key}
+            style={[styles.modeSegment, active && styles.modeSegmentActive]}
+            onPress={() => onSelect(opt.key)}
+            activeOpacity={0.8}
+          >
+            <Ionicons name={opt.icon} size={14} color={active ? '#FFF' : COLORS.primary} />
+            <Text style={[styles.modeSegmentText, active && styles.modeSegmentTextActive]}>
+              {opt.label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 function CustomerTabs() {
   const { t, isRTL } = useThemeLang();
   const { user, switchMode } = useContext(AuthContext);
+  const { unread } = useContext(UnreadContext);
+  const insets = useSafeAreaInsets();
+  const [initialRoute] = useState(() => (openSettingsOnMount ? 'Settings' : 'NewOrder'));
+
+  useEffect(() => {
+    openSettingsOnMount = false;
+  }, []);
 
   return (
     <Tab.Navigator
+      initialRouteName={initialRoute}
       screenOptions={({ route }) => ({
         headerShown: true,
         headerStyle: { backgroundColor: COLORS.primary },
@@ -56,23 +107,24 @@ function CustomerTabs() {
         headerTitleStyle: { fontWeight: '800', fontSize: 17 },
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: '#64748B',
-        tabBarStyle: { height: 62, paddingBottom: 8, paddingTop: 6 },
+        tabBarStyle: {
+          height: 62 + insets.bottom,
+          paddingBottom: 8 + insets.bottom,
+          paddingTop: 6,
+        },
         headerRight: () =>
           user?.role === 'driver' ? (
-            <TouchableOpacity
-              style={styles.switchRoleBtn}
-              onPress={() => switchMode('driver')}
-            >
-              <Ionicons name="bicycle" size={16} color={COLORS.primary} />
-              <Text style={styles.switchRoleText}>
-                {isRTL ? 'وضع السائق' : 'Mode Livreur'}
-              </Text>
-            </TouchableOpacity>
+            <ModeSwitch
+              current="customer"
+              onSelect={(mode) => selectMode('customer', mode, switchMode)}
+              isRTL={isRTL}
+            />
           ) : null,
         tabBarIcon: ({ color, size }) => {
           let iconName = 'cube-outline';
           if (route.name === 'NewOrder') iconName = 'map-outline';
           else if (route.name === 'Orders') iconName = 'list-outline';
+          else if (route.name === 'Notifications') iconName = 'notifications-outline';
           else if (route.name === 'Settings') iconName = 'settings-outline';
           return <Ionicons name={iconName} size={size} color={color} />;
         },
@@ -94,6 +146,14 @@ function CustomerTabs() {
         }}
       />
       <Tab.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{
+          title: isRTL ? 'الإشعارات' : 'Notifications',
+          tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
+        }}
+      />
+      <Tab.Screen
         name="Settings"
         component={SettingsScreen}
         options={{
@@ -107,6 +167,8 @@ function CustomerTabs() {
 function DriverTabs() {
   const { t, isRTL } = useThemeLang();
   const { switchMode } = useContext(AuthContext);
+  const { unread } = useContext(UnreadContext);
+  const insets = useSafeAreaInsets();
 
   return (
     <Tab.Navigator
@@ -117,23 +179,24 @@ function DriverTabs() {
         headerTitleStyle: { fontWeight: '800', fontSize: 17 },
         tabBarActiveTintColor: COLORS.primary,
         tabBarInactiveTintColor: '#64748B',
-        tabBarStyle: { height: 62, paddingBottom: 8, paddingTop: 6 },
+        tabBarStyle: {
+          height: 62 + insets.bottom,
+          paddingBottom: 8 + insets.bottom,
+          paddingTop: 6,
+        },
         headerRight: () => (
-          <TouchableOpacity
-            style={styles.switchRoleBtn}
-            onPress={() => switchMode('customer')}
-          >
-            <Ionicons name="person" size={15} color={COLORS.primary} />
-            <Text style={styles.switchRoleText}>
-              {isRTL ? 'وضع الزبون' : 'Mode Client'}
-            </Text>
-          </TouchableOpacity>
+          <ModeSwitch
+            current="driver"
+            onSelect={(mode) => selectMode('driver', mode, switchMode)}
+            isRTL={isRTL}
+          />
         ),
         tabBarIcon: ({ color, size }) => {
           let iconName = 'speedometer-outline';
           if (route.name === 'DriverDashboard') iconName = 'speedometer-outline';
           else if (route.name === 'DriverPool') iconName = 'navigate-circle-outline';
           else if (route.name === 'DriverBids') iconName = 'pricetag-outline';
+          else if (route.name === 'Notifications') iconName = 'notifications-outline';
           else if (route.name === 'Settings') iconName = 'settings-outline';
           return <Ionicons name={iconName} size={size} color={color} />;
         },
@@ -161,6 +224,14 @@ function DriverTabs() {
         }}
       />
       <Tab.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{
+          title: isRTL ? 'الإشعارات' : 'Notifications',
+          tabBarBadge: unread > 0 ? (unread > 99 ? '99+' : unread) : undefined,
+        }}
+      />
+      <Tab.Screen
         name="Settings"
         component={SettingsScreen}
         options={{
@@ -176,23 +247,39 @@ export default function AppNavigator() {
   const { isRTL } = useThemeLang();
   const notificationListener = useRef();
   const responseListener = useRef();
+  const [unread, setUnread] = useState(0);
 
-  // Mémoire des états connus pour déclencher une notification locale dès qu'un changement survient en BDD
-  const knownStateRef = useRef({
-    initialized: false,
-    orderStatuses: {}, // { [orderId]: status }
-    orderBidCounts: {}, // { [orderId]: count }
-    poolOrderIds: new Set(),
-    driverBidStatuses: {}, // { [bidId]: status }
-  });
+  const isDriverMode =
+    !!user && (user.current_mode === 'driver' || (!user.current_mode && user.role === 'driver'));
+  const currentRole = isDriverMode ? 'driver' : 'customer';
+
+  // Compteur de notifications non lues du mode actif (badge de l'onglet Notifications)
+  const refreshUnread = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const res = await API.get('auth.php?action=notifications', { params: { role: currentRole } });
+      if (res.data?.success) setUnread(Number(res.data.unread_count) || 0);
+    } catch (e) {}
+  }, [user?.id, currentRole]);
+
+  // Un seul appel serveur à la connexion et à chaque changement de mode (pas de polling)
+  useEffect(() => {
+    if (!user?.id) {
+      setUnread(0);
+      return;
+    }
+    refreshUnread();
+  }, [refreshUnread]);
 
   const handleRoleSwitchIfNeeded = (targetRole) => {
-    if (!user || !targetRole) return;
-    const currentMode = user.current_mode || user.role || 'customer';
-    if (targetRole !== currentMode && typeof setUser === 'function') {
-      setUser((prev) => (prev ? { ...prev, current_mode: targetRole } : prev));
-    }
+    if (!targetRole || typeof setUser !== 'function') return;
+    setUser((prev) =>
+      prev && prev.current_mode !== targetRole ? { ...prev, current_mode: targetRole } : prev
+    );
   };
+
+  const refreshUnreadRef = useRef(refreshUnread);
+  refreshUnreadRef.current = refreshUnread;
 
   useEffect(() => {
     if (!user) return;
@@ -204,7 +291,7 @@ export default function AppNavigator() {
       }
     });
 
-    notificationListener.current = addNotificationReceivedListener(() => {});
+    notificationListener.current = addNotificationReceivedListener(() => refreshUnreadRef.current());
 
     responseListener.current = addNotificationResponseReceivedListener((response) => {
       const data = response?.notification?.request?.content?.data;
@@ -219,136 +306,6 @@ export default function AppNavigator() {
     };
   }, [user?.id]);
 
-  // Surveillance temps réel (Polling léger toutes les 8s) pour déclencher les notifications même sans Firebase
-  useEffect(() => {
-    if (!user?.id) return;
-
-    const checkUpdates = async () => {
-      const mem = knownStateRef.current;
-      const isFirstRun = !mem.initialized;
-
-      // 1. Vérifier les commandes du client (offres reçues & changements de statut)
-      try {
-        const resCust = await API.get('customer.php?action=my_orders');
-        if (resCust.data?.success && Array.isArray(resCust.data.orders)) {
-          for (const ord of resCust.data.orders) {
-            const oid = Number(ord.id);
-            const bidCount = Array.isArray(ord.bids) ? ord.bids.length : 0;
-
-            if (!isFirstRun) {
-              // Nouvelle offre reçue d'un livreur
-              if (
-                typeof mem.orderBidCounts[oid] === 'number' &&
-                bidCount > mem.orderBidCounts[oid]
-              ) {
-                const latestBid = ord.bids[0];
-                await triggerLocalNotification(
-                  `🛵 Nouvelle offre (#${ord.code})`,
-                  `Un livreur propose ${latestBid?.bid_amount || ''} DA pour votre course. Appuyez pour voir.`,
-                  {
-                    type: 'NEW_BID',
-                    screen: 'Orders',
-                    orderId: oid,
-                    targetRole: 'customer',
-                  }
-                );
-              }
-
-              // Changement de statut (DRIVER_ASSIGNED, PICKED_UP, DELIVERED)
-              if (mem.orderStatuses[oid] && mem.orderStatuses[oid] !== ord.status) {
-                if (ord.status === 'PICKED_UP') {
-                  await triggerLocalNotification(
-                    `📦 Colis récupéré (#${ord.code})`,
-                    `Le livreur a récupéré votre colis et est en route vers la destination.`,
-                    {
-                      type: 'ORDER_STATUS_CHANGED',
-                      screen: 'Orders',
-                      orderId: oid,
-                      targetRole: 'customer',
-                    }
-                  );
-                } else if (ord.status === 'DELIVERED') {
-                  await triggerLocalNotification(
-                    `🎉 Colis livré (#${ord.code})`,
-                    `Votre commande #${ord.code} a été livrée avec succès !`,
-                    {
-                      type: 'ORDER_STATUS_CHANGED',
-                      screen: 'Orders',
-                      orderId: oid,
-                      targetRole: 'customer',
-                    }
-                  );
-                }
-              }
-            }
-
-            mem.orderBidCounts[oid] = bidCount;
-            mem.orderStatuses[oid] = ord.status;
-          }
-        }
-      } catch (e) {}
-
-      // 2. Si l'utilisateur possède un profil livreur, vérifier le Pool et ses Offres
-      if (user.role === 'driver' || user.current_mode === 'driver') {
-        try {
-          const resPool = await API.get('driver.php?action=pool');
-          if (resPool.data?.success && Array.isArray(resPool.data.pool)) {
-            for (const p of resPool.data.pool) {
-              const pid = Number(p.id);
-              if (!isFirstRun && !mem.poolOrderIds.has(pid)) {
-                await triggerLocalNotification(
-                  `📦 Nouvelle course disponible (#${p.code})`,
-                  `${p.pickup_address} ➔ ${p.delivery_address} (${p.estimated_price} DA)`,
-                  {
-                    type: 'NEW_ORDER_POOL',
-                    screen: 'DriverPool',
-                    orderId: pid,
-                    targetRole: 'driver',
-                  }
-                );
-              }
-              mem.poolOrderIds.add(pid);
-            }
-          }
-        } catch (e) {}
-
-        try {
-          const resBids = await API.get('driver.php?action=driver_bids');
-          if (resBids.data?.success && Array.isArray(resBids.data.bids)) {
-            for (const b of resBids.data.bids) {
-              const bidId = Number(b.bid_id || b.id);
-              const orderId = Number(b.order_id || b.parcel_order_id);
-              if (
-                !isFirstRun &&
-                mem.driverBidStatuses[bidId] &&
-                mem.driverBidStatuses[bidId] !== 'accepted' &&
-                b.bid_status === 'accepted'
-              ) {
-                await triggerLocalNotification(
-                  `✅ Offre acceptée (#${b.code}) !`,
-                  `Le client a accepté votre offre à ${b.bid_amount} DA. Appuyez pour voir les détails.`,
-                  {
-                    type: 'BID_ACCEPTED',
-                    screen: 'DriverBids',
-                    orderId: orderId,
-                    targetRole: 'driver',
-                  }
-                );
-              }
-              mem.driverBidStatuses[bidId] = b.bid_status;
-            }
-          }
-        } catch (e) {}
-      }
-
-      mem.initialized = true;
-    };
-
-    checkUpdates();
-    const interval = setInterval(checkUpdates, 8000);
-    return () => clearInterval(interval);
-  }, [user?.id, user?.role, user?.current_mode]);
-
   if (loading) {
     return (
       <View style={{ flex: 1, justifyContent: 'center', alignItems: 'center' }}>
@@ -357,10 +314,8 @@ export default function AppNavigator() {
     );
   }
 
-  const isDriverMode =
-    user && (user.current_mode === 'driver' || (!user.current_mode && user.role === 'driver'));
-
   return (
+    <UnreadContext.Provider value={{ unread, refreshUnread }}>
     <NavigationContainer
       ref={navigationRef}
       onReady={() => {
@@ -392,23 +347,35 @@ export default function AppNavigator() {
         )}
       </Stack.Navigator>
     </NavigationContainer>
+    </UnreadContext.Provider>
   );
 }
 
 const styles = StyleSheet.create({
-  switchRoleBtn: {
+  modeSwitch: {
     flexDirection: 'row',
-    alignItems: 'center',
     backgroundColor: '#FFFFFF',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
     borderRadius: 20,
+    padding: 3,
     marginRight: 12,
   },
-  switchRoleText: {
+  modeSegment: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 17,
+  },
+  modeSegmentActive: {
+    backgroundColor: COLORS.primary,
+  },
+  modeSegmentText: {
     color: COLORS.primary,
     fontWeight: '800',
     fontSize: 12,
-    marginLeft: 5,
+    marginLeft: 4,
+  },
+  modeSegmentTextActive: {
+    color: '#FFFFFF',
   },
 });

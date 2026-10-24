@@ -18,7 +18,6 @@ try {
   if (Notifications && typeof Notifications.setNotificationHandler === 'function') {
     Notifications.setNotificationHandler({
       handleNotification: async () => ({
-        shouldShowAlert: true,
         shouldShowBanner: true,
         shouldShowList: true,
         shouldPlaySound: true,

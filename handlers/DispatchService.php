@@ -4,12 +4,10 @@
 class DispatchService
 {
     private $pdo;
-    private $bot_token;
 
-    public function __construct(PDO $pdo, string $bot_token)
+    public function __construct(PDO $pdo)
     {
         $this->pdo = $pdo;
-        $this->bot_token = $bot_token;
     }
 
     /**
@@ -193,13 +191,13 @@ class DispatchService
         }
 
         $sqlDrivers = "
-            SELECT dp.id, dp.full_name, tu.push_token, tu.telegram_id, dp.rating, dp.vehicle_type,
+            SELECT dp.id, dp.full_name, tu.id AS user_id, tu.push_token, dp.rating, dp.vehicle_type,
                    IF(tu.latitude IS NOT NULL AND tu.longitude IS NOT NULL,
                       (6371 * acos(cos(radians(:lat)) * cos(radians(tu.latitude)) * cos(radians(tu.longitude) - radians(:lon)) + sin(radians(:lat)) * sin(radians(tu.latitude)))),
                       3.0
                    ) AS dist_km
             FROM driver_profiles dp
-            JOIN telegram_users tu ON dp.telegram_user_id = tu.id
+            JOIN app_users tu ON dp.app_user_id = tu.id
             WHERE dp.is_online = 1
                 AND dp.verification_status = 'approved'
                 AND FIND_IN_SET(dp.vehicle_type, :vtypes) > 0
@@ -234,114 +232,27 @@ class DispatchService
             return ['success' => false, 'notified_count' => 0];
         }
 
-        $targetChatIds = array_filter(array_column($drivers, 'telegram_id'));
-        $driverIds     = array_column($drivers, 'id');
+        $driverIds = array_column($drivers, 'id');
 
         $placeholders = implode(',', array_fill(0, count($driverIds), '?'));
         $this->pdo->prepare("UPDATE driver_profiles SET last_assigned_at = NOW() WHERE id IN ($placeholders)")
             ->execute($driverIds);
 
-        $vLabel = $firstVConfig['title_fr'] ?? ucfirst($vehicleType);
-        $pickupMapsUrl = "https://www.google.com/maps?q={$lat},{$lon}";
-        $destMapsHtml  = (!empty($parcel['delivery_lat']) && !empty($parcel['delivery_lon']))
-            ? " (<a href='https://www.google.com/maps/dir/{$lat},{$lon}/{$parcel['delivery_lat']},{$parcel['delivery_lon']}'>Itinéraire Maps</a>)"
-            : "";
-
-        $distText = ((float)$parcel['distance_km'] > 0) ? " (~" . (float)$parcel['distance_km'] . " km)" : "";
-        $estPrice = (float)$parcel['estimated_price'];
-        $isRoundTrip = !empty($parcel['is_round_trip']);
-        $tripTag = $isRoundTrip ? "🔄 <b>TRAJET ALLER-RETOUR</b>\n" : "";
-
-        $msg  = "📦 <b>NOUVELLE COURSE LIVRILI ({$parcel['code']})</b>\n\n";
-        $msg .= "🚗 Véhicule : <b>{$vLabel}</b>{$distText}\n";
-        $msg .= $tripTag;
-        $msg .= "📍 Départ : <b>" . htmlspecialchars($parcel['pickup_address']) . "</b> (<a href='{$pickupMapsUrl}'>GPS</a>)\n";
-        $msg .= "🏁 Arrivée : <b>" . htmlspecialchars($parcel['delivery_address']) . "</b>{$destMapsHtml}\n";
-        if ($isRoundTrip) {
-            $msg .= "⚠️ <i>Le coursier doit revenir au point de départ (Documents/Échange/Retour).</i>\n";
-        }
-        $msg .= "📝 Objet : <i>" . htmlspecialchars($parcel['parcel_description']) . "</i>\n";
-        $msg .= "💰 Tarif proposé : <b>" . number_format($estPrice, 0, '.', ' ') . " DA</b>\n\n";
-
-        $step = (int)($firstVConfig['bid_step'] ?? 50);
-        $p1 = (int)$estPrice;
-        $p2 = (int)($estPrice + $step);
-        $p3 = (int)($estPrice + ($step * 2));
-        $p4 = (int)($estPrice + ($step * 3));
-
-        $keyboard = [
-            'inline_keyboard' => [
-                [
-                    ['text' => "✅ {$p1} DA", 'callback_data' => "livrili_bid_{$parcel_id}_{$p1}"],
-                    ['text' => "💵 {$p2} DA", 'callback_data' => "livrili_bid_{$parcel_id}_{$p2}"]
-                ],
-                [
-                    ['text' => "💵 {$p3} DA", 'callback_data' => "livrili_bid_{$parcel_id}_{$p3}"],
-                    ['text' => "💵 {$p4} DA", 'callback_data' => "livrili_bid_{$parcel_id}_{$p4}"]
-                ],
-                [['text' => "🎛 Tableau de bord", 'callback_data' => 'dash']]
-            ]
-        ];
-
-        if (!empty($targetChatIds)) {
-            $this->broadcastToDrivers('sendMessage', $targetChatIds, [
-                'text'                     => $msg,
-                'parse_mode'               => 'HTML',
-                'disable_web_page_preview' => true,
-                'reply_markup'             => $keyboard
-            ]);
-        }
-
         foreach ($drivers as $drv) {
+            $title = "📦 Nouvelle course disponible !";
+            $body  = "Départ : {$parcel['pickup_address']} ({$parcel['estimated_price']} DA)";
+            $data  = [
+                'type'       => 'NEW_ORDER_POOL',
+                'screen'     => 'DriverPool',
+                'orderId'    => (int)$parcel_id,
+                'targetRole' => 'driver',
+            ];
+            storeNotification($this->pdo, (int)$drv['user_id'], $title, $body, $data);
             if (!empty($drv['push_token'])) {
-                sendPushNotification(
-                    $drv['push_token'],
-                    "📦 Nouvelle course disponible !",
-                    "Départ : {$parcel['pickup_address']} ({$parcel['estimated_price']} DA)",
-                    [
-                        'type'       => 'NEW_ORDER_POOL',
-                        'screen'     => 'DriverPool',
-                        'orderId'    => (int)$parcel_id,
-                        'targetRole' => 'driver',
-                    ]
-                );
+                sendPushNotification($drv['push_token'], $title, $body, $data);
             }
         }
 
         return ['success' => true, 'notified_count' => count($drivers)];
-    }
-
-    private function broadcastToDrivers(string $method, array $chatIds, array $basePayload)
-    {
-        $chatIds = array_values(array_unique($chatIds));
-        if (empty($chatIds)) return;
-
-        $apiUrl = "https://api.telegram.org/bot{$this->bot_token}/{$method}";
-        $mh = curl_multi_init();
-        $handles = [];
-
-        foreach ($chatIds as $cid) {
-            $payload = $basePayload;
-            $payload['chat_id'] = $cid;
-            $ch = curl_init($apiUrl);
-            curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-            curl_setopt($ch, CURLOPT_POSTFIELDS, json_encode($payload));
-            curl_setopt($ch, CURLOPT_HTTPHEADER, ['Content-Type: application/json']);
-            curl_setopt($ch, CURLOPT_TIMEOUT, 3);
-            curl_setopt($ch, CURLOPT_NOSIGNAL, 1);
-            curl_multi_add_handle($mh, $ch);
-            $handles[] = $ch;
-        }
-
-        $running = null;
-        do {
-            curl_multi_exec($mh, $running);
-        } while ($running);
-
-        foreach ($handles as $ch) {
-            curl_multi_remove_handle($mh, $ch);
-            curl_close($ch);
-        }
-        curl_multi_close($mh);
     }
 }

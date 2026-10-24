@@ -1,17 +1,17 @@
 <?php
 class Config
 {
-    // Token du Bot Telegram
-    public static $botToken = '8911199941:AAGhI6AZaWERbyFDgDI7CVCMDtUVhhjVzuQ';
-
     // Domaine public
     public static $baseUrl  = 'https://livrili.bouhezila.com';
 
-    // Nettoyage glissant des messages dans le chat du bot
-    public static $maxBotMessagesToKeep = 6;
-
     // Jeton Cron
     public static $cronSecretToken = '@2026livrili';
+
+    // Client IDs OAuth Google acceptés (Android + Web) — Google Cloud Console
+    public static $googleClientIds = [
+        '185591388050-l57mmdjc1j8aod1a41453i4da891caoo.apps.googleusercontent.com',
+        '185591388050-cmmhb1hndmqmkfnl5dpvm360k142uvkd.apps.googleusercontent.com',
+    ];
 
     // Cache GPS en minutes
     public static $gpsCacheValidityMinutes = 60;

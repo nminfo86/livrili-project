@@ -36,7 +36,7 @@ function getAuthenticatedCustomer(PDO $pdo)
 
     // Validation du token en base de données
     if (!empty($token)) {
-        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE auth_token = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM app_users WHERE auth_token = ? LIMIT 1");
         $stmt->execute([$token]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($user) {
@@ -47,7 +47,7 @@ function getAuthenticatedCustomer(PDO $pdo)
     // 4. Repli de secours via user_id
     $userId = intval($_GET['user_id'] ?? $_POST['user_id'] ?? $rawInput['user_id'] ?? 0);
     if ($userId > 0) {
-        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM app_users WHERE id = ? LIMIT 1");
         $stmt->execute([$userId]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($user) {
@@ -70,7 +70,7 @@ $action = $_GET['action'] ?? '';
 // 0. RÉCUPÉRATION DYNAMIQUE DES MODES DE TRANSPORT ET PARAMÈTRES DE PRIX
 // -------------------------------------------------------------------------
 if ($action === 'get_transport_modes') {
-    $dispatch = new DispatchService($pdo, Config::$botToken ?? '');
+    $dispatch = new DispatchService($pdo);
     $modes = $dispatch->getActiveTransportModes();
     jsonResponse([
         'success'         => true,
@@ -92,7 +92,13 @@ if ($action === 'create_order') {
 
     // 1. Authentifier l'utilisateur
     $currentUser = getAuthenticatedCustomer($pdo);
-    $senderTelegramId = !empty($currentUser['telegram_id']) ? $currentUser['telegram_id'] : $currentUser['id'];
+    $senderId = (int)$currentUser['id'];
+
+    if (empty($currentUser['phone'])) {
+        http_response_code(400);
+        echo json_encode(['success' => false, 'error' => 'Votre numéro de téléphone est obligatoire pour passer une commande.']);
+        exit;
+    }
 
     // 2. Récupérer les données JSON envoyées par Axios (React Native)
     $rawInput = json_decode(file_get_contents('php://input'), true) ?: $_POST;
@@ -139,7 +145,7 @@ if ($action === 'create_order') {
     $insertSql = "
         INSERT INTO parcel_orders (
             code,
-            sender_telegram_id,
+            sender_id,
             sender_phone,
             pickup_lat,
             pickup_lon,
@@ -167,7 +173,7 @@ if ($action === 'create_order') {
     $stmt = $pdo->prepare($insertSql);
     $success = $stmt->execute([
         $orderCode,
-        $senderTelegramId,
+        $senderId,
         $currentUser['phone'] ?? '',
         $pickupLat,
         $pickupLon,
@@ -201,29 +207,29 @@ if ($action === 'create_order') {
 
     // vehicle_type peut contenir plusieurs types séparés par des virgules (ex: moto,fourgon)
     $stmtDrivers = $pdo->prepare("
-    SELECT DISTINCT u.push_token 
+    SELECT DISTINCT u.id AS user_id, u.push_token 
     FROM driver_profiles dp
-    INNER JOIN telegram_users u ON u.id = dp.telegram_user_id
+    INNER JOIN app_users u ON u.id = dp.app_user_id
     WHERE dp.is_online = 1 
       AND dp.verification_status = 'approved'
       AND FIND_IN_SET(dp.vehicle_type, :vtype)
-      AND u.push_token IS NOT NULL
 ");
     $stmtDrivers->execute([':vtype' => str_replace(' ', '', $vehicleType)]);
-    $driverTokens = $stmtDrivers->fetchAll(PDO::FETCH_COLUMN);
+    $driversToNotify = $stmtDrivers->fetchAll(PDO::FETCH_ASSOC);
 
-    if (!empty($driverTokens)) {
-        sendExpoPushNotifications(
-            $driverTokens,
-            "📦 Nouvelle course disponible (#$orderCode)",
-            "Départ : $pickupAddress ➔ $deliveryAddress ($estimatedPrice DA)",
-            [
-                'type'       => 'NEW_ORDER_POOL',
-                'screen'     => 'DriverPool',
-                'orderId'    => $newOrderId,
-                'targetRole' => 'driver'
-            ]
-        );
+    if (!empty($driversToNotify)) {
+        $title = "📦 Nouvelle course disponible (#$orderCode)";
+        $body  = "Départ : $pickupAddress ➔ $deliveryAddress ($estimatedPrice DA)";
+        $data  = [
+            'type'       => 'NEW_ORDER_POOL',
+            'screen'     => 'DriverPool',
+            'orderId'    => $newOrderId,
+            'targetRole' => 'driver'
+        ];
+        foreach ($driversToNotify as $d) {
+            storeNotification($pdo, (int)$d['user_id'], $title, $body, $data);
+        }
+        sendExpoPushNotifications(array_column($driversToNotify, 'push_token'), $title, $body, $data);
     }
     exit;
 }
@@ -260,7 +266,7 @@ if ($action === 'my_orders') {
 
     $currentUser = null;
     if (!empty($token)) {
-        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE auth_token = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM app_users WHERE auth_token = ? LIMIT 1");
         $stmt->execute([$token]);
         $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
     }
@@ -269,7 +275,7 @@ if ($action === 'my_orders') {
     if (!$currentUser) {
         $userIdFallback = intval($_GET['user_id'] ?? $_POST['user_id'] ?? $rawInput['user_id'] ?? 0);
         if ($userIdFallback > 0) {
-            $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ? LIMIT 1");
+            $stmt = $pdo->prepare("SELECT * FROM app_users WHERE id = ? LIMIT 1");
             $stmt->execute([$userIdFallback]);
             $currentUser = $stmt->fetch(PDO::FETCH_ASSOC);
         }
@@ -284,16 +290,14 @@ if ($action === 'my_orders') {
         exit;
     }
 
-    // Identifiants de l'expéditeur (telegram_id ou id numérique utilisateur)
-    $telegramId = !empty($currentUser['telegram_id']) ? $currentUser['telegram_id'] : $currentUser['id'];
-    $internalId = $currentUser['id'];
+    $userId = (int)$currentUser['id'];
 
     // 2. RÉCUPÉRATION DES COMMANDES AVEC INFOS DU LIVREUR ASSIGNÉ
     $orderQuery = "
         SELECT 
             po.id,
             po.code,
-            po.sender_telegram_id,
+            po.sender_id,
             po.sender_phone,
             po.pickup_lat,
             po.pickup_lon,
@@ -322,17 +326,23 @@ if ($action === 'my_orders') {
             dp.moto_brand AS driver_vehicle_brand,
             dp.moto_color AS driver_vehicle_color,
             dp.plate_number AS driver_plate,
+            COALESCE(dtm.title_fr, dp.vehicle_type) AS driver_vehicle_type,
             IFNULL(dp.rating, 100.00) AS driver_rating
         FROM parcel_orders po
         LEFT JOIN driver_profiles dp ON po.selected_driver_id = dp.id
-        WHERE (po.sender_telegram_id = ? OR po.sender_telegram_id = ?)
-          AND (po.status <> 'DELIVERED' OR DATE(po.delivered_at) = CURDATE())
-        ORDER BY (po.status = 'DELIVERED') ASC, po.created_at DESC
+        LEFT JOIN transport_modes dtm ON dp.vehicle_type = dtm.id
+        WHERE po.sender_id = ?
+          AND (
+              po.status NOT IN ('DELIVERED', 'CANCELLED')
+              OR (po.status = 'DELIVERED' AND DATE(po.delivered_at) = CURDATE())
+              OR (po.status = 'CANCELLED' AND DATE(po.updated_at) = CURDATE())
+          )
+        ORDER BY (po.status IN ('DELIVERED', 'CANCELLED')) ASC, po.created_at DESC
         LIMIT 40
     ";
 
     $stmtOrders = $pdo->prepare($orderQuery);
-    $stmtOrders->execute([$telegramId, $internalId]);
+    $stmtOrders->execute([$userId]);
     $rawOrders = $stmtOrders->fetchAll(PDO::FETCH_ASSOC);
 
     if (empty($rawOrders)) {
@@ -357,9 +367,11 @@ if ($action === 'my_orders') {
             dp.moto_brand,
             dp.moto_color,
             dp.plate_number,
+            COALESCE(tm.title_fr, dp.vehicle_type) AS vehicle_type,
             IFNULL(dp.rating, 100.00) AS rating
         FROM parcel_bids pb
         JOIN driver_profiles dp ON pb.driver_id = dp.id
+        LEFT JOIN transport_modes tm ON dp.vehicle_type = tm.id
         WHERE pb.parcel_order_id = ?
         ORDER BY pb.bid_amount ASC, pb.created_at ASC
     ");
@@ -415,6 +427,7 @@ if ($action === 'my_orders') {
             'driver_vehicle_brand' => $order['driver_vehicle_brand'],
             'driver_vehicle_color' => $order['driver_vehicle_color'],
             'driver_plate'         => $order['driver_plate'],
+            'driver_vehicle_type'  => $order['driver_vehicle_type'],
             'driver_rating'        => round((float)$order['driver_rating'], 0),
             // Tableau des offres
             'bids'                 => $bidsList,
@@ -476,29 +489,92 @@ if ($action === 'accept_bid') {
 
     // Récupérer le push_token du livreur sélectionné et le code de la commande
     $stmtNotifDriver = $pdo->prepare("
-    SELECT u.push_token, po.code, po.pickup_address, po.agreed_fee
+    SELECT u.id AS user_id, u.push_token, po.code, po.pickup_address, po.agreed_fee
     FROM parcel_orders po
     INNER JOIN driver_profiles dp ON dp.id = po.selected_driver_id
-    INNER JOIN telegram_users u ON u.id = dp.telegram_user_id
+    INNER JOIN app_users u ON u.id = dp.app_user_id
     WHERE po.id = :order_id
 ");
     $stmtNotifDriver->execute([':order_id' => $orderId]);
     $notifInfo = $stmtNotifDriver->fetch(PDO::FETCH_ASSOC);
 
-    if ($notifInfo && !empty($notifInfo['push_token'])) {
-        sendExpoPushNotifications(
-            $notifInfo['push_token'],
-            "✅ Votre offre a été acceptée ! (#{$notifInfo['code']})",
-            "Montant : {$notifInfo['agreed_fee']} DA. Rendez-vous au point de départ : {$notifInfo['pickup_address']}",
-            [
-                'type'       => 'BID_ACCEPTED',
-                'screen'     => 'DriverBids',
-                'orderId'    => (int)$orderId,
-                'targetRole' => 'driver'
-            ]
-        );
+    if ($notifInfo) {
+        $title = "✅ Votre offre a été acceptée ! (#{$notifInfo['code']})";
+        $body  = "Montant : {$notifInfo['agreed_fee']} DA. Rendez-vous au point de départ : {$notifInfo['pickup_address']}";
+        $data  = [
+            'type'       => 'BID_ACCEPTED',
+            'screen'     => 'DriverBids',
+            'orderId'    => (int)$orderId,
+            'targetRole' => 'driver'
+        ];
+        storeNotification($pdo, (int)$notifInfo['user_id'], $title, $body, $data);
+        if (!empty($notifInfo['push_token'])) {
+            sendExpoPushNotifications($notifInfo['push_token'], $title, $body, $data);
+        }
     }
 
+    exit;
+}
+
+// -------------------------------------------------------------------------
+// 4. ANNULATION D'UNE COMMANDE (tant qu'aucun livreur n'est choisi)
+// -------------------------------------------------------------------------
+if ($action === 'cancel_order') {
+    header('Content-Type: application/json; charset=utf-8');
+
+    $currentUser = getAuthenticatedCustomer($pdo);
+    $raw     = json_decode(file_get_contents('php://input'), true) ?: $_POST;
+    $orderId = intval($raw['order_id'] ?? 0);
+
+    if ($orderId <= 0) {
+        echo json_encode(['success' => false, 'error' => 'Paramètres manquants']);
+        exit;
+    }
+
+    $up = $pdo->prepare("
+        UPDATE parcel_orders
+        SET status = 'CANCELLED'
+        WHERE id = ? AND sender_id = ? AND status = 'SEARCHING' AND selected_driver_id IS NULL
+    ");
+    $up->execute([$orderId, $currentUser['id']]);
+
+    if ($up->rowCount() === 0) {
+        echo json_encode(['success' => false, 'error' => 'Annulation impossible : un livreur a déjà été choisi ou la commande est introuvable.'], JSON_UNESCAPED_UNICODE);
+        exit;
+    }
+
+    // Livreurs ayant déjà proposé une offre (à prévenir de l'annulation)
+    $stmtBidders = $pdo->prepare("
+        SELECT DISTINCT u.id AS user_id, u.push_token, po.code
+        FROM parcel_bids pb
+        INNER JOIN driver_profiles dp ON dp.id = pb.driver_id
+        INNER JOIN app_users u ON u.id = dp.app_user_id
+        INNER JOIN parcel_orders po ON po.id = pb.parcel_order_id
+        WHERE pb.parcel_order_id = ? AND pb.status = 'pending'
+    ");
+    $stmtBidders->execute([$orderId]);
+    $bidders = $stmtBidders->fetchAll(PDO::FETCH_ASSOC);
+
+    $pdo->prepare("UPDATE parcel_bids SET status = 'rejected' WHERE parcel_order_id = ? AND status = 'pending'")
+        ->execute([$orderId]);
+
+    echo json_encode(['success' => true], JSON_UNESCAPED_UNICODE);
+
+    if (!empty($bidders)) {
+        $orderCode = $bidders[0]['code'];
+        $title = "❌ Commande annulée (#{$orderCode})";
+        $body  = "Le client a annulé la commande #{$orderCode} sur laquelle vous aviez fait une offre.";
+        $data  = [
+            'type'       => 'ORDER_CANCELLED',
+            'screen'     => 'DriverPool',
+            'orderId'    => (int)$orderId,
+            'targetRole' => 'driver'
+        ];
+        foreach ($bidders as $b) {
+            storeNotification($pdo, (int)$b['user_id'], $title, $body, $data);
+        }
+        sendExpoPushNotifications(array_column($bidders, 'push_token'), $title, $body, $data);
+    }
     exit;
 }
 

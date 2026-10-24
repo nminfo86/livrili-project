@@ -264,6 +264,7 @@ export default function OrdersScreen({ route }) {
                           </Text>
                           <Text style={[styles.inlineText, { textAlign: textAlignDir }]}>
                             {[
+                              detailOrder.driver_vehicle_type,
                               detailOrder.driver_vehicle_brand,
                               detailOrder.driver_vehicle_color,
                               detailOrder.driver_plate,
@@ -385,7 +386,11 @@ export default function OrdersScreen({ route }) {
                       >
                         <View style={{ flex: 1 }}>
                           <Text style={[styles.bidDriverName, { textAlign: textAlignDir }]}>
-                            🛵 {bid.driver_name || 'Livreur'} ({bid.rating || 100}%)
+                            🛵 {bid.full_name || 'Livreur'}
+                          </Text>
+                          <Text style={[styles.inlineText, { textAlign: textAlignDir }]}>
+                            Fiabilité : {bid.rating ?? 100}%
+                            {bid.vehicle_type ? ` · ${bid.vehicle_type}` : ''}
                           </Text>
                           <Text style={[styles.bidAmount, { textAlign: textAlignDir }]}>
                             {bid.bid_amount} DA
@@ -410,6 +415,10 @@ export default function OrdersScreen({ route }) {
                     <View style={styles.driverBox}>
                       <Text style={[styles.driverInfo, { textAlign: textAlignDir }]}>
                         🛵 Livreur : {item.driver_name || 'Assigné'} ({item.driver_phone})
+                      </Text>
+                      <Text style={[styles.driverInfo, { textAlign: textAlignDir }]}>
+                        Fiabilité : {item.driver_rating ?? 100}%
+                        {item.driver_vehicle_type ? ` · ${item.driver_vehicle_type}` : ''}
                       </Text>
                       <TouchableOpacity
                         style={styles.callBtn}
