@@ -1,5 +1,5 @@
 // src/screens/customer/NewOrderScreen.js
-import React, { useState, useEffect, useRef } from "react";
+import React, { useState, useEffect, useRef, useContext } from "react";
 import {
   View,
   Text,
@@ -26,6 +26,7 @@ import {
   SHADOWS,
 } from "../../context/ThemeLanguageContext";
 import apiClient from "../../api/client";
+import { AuthContext } from "../../context/AuthContext";
 import localLocations from "../../data/algeriaLocations.json";
 import { GOOGLE_MAPS_API_KEY, DEFAULT_COORDS } from "../../config/mapsConfig";
 import {
@@ -76,10 +77,16 @@ const DEFAULT_VEHICLES = [
 
 export default function NewOrderScreen({ navigation }) {
   const { t, isRTL } = useThemeLang();
+  const { user, updateUser } = useContext(AuthContext);
+  const [senderPhone, setSenderPhone] = useState("");
+  const [senderPhoneError, setSenderPhoneError] = useState("");
   const webViewRef = useRef(null);
 
   // Moteur de carte actif : true = Google Maps | false = OpenStreetMap
   const [isGoogleMapsActive, setIsGoogleMapsActive] = useState(false);
+  // La carte n'est montée qu'après le test Google ; le spinner reste affiché jusqu'aux tuiles
+  const [engineChecked, setEngineChecked] = useState(false);
+  const [mapReady, setMapReady] = useState(false);
 
   const [vehicles, setVehicles] = useState(DEFAULT_VEHICLES);
   const [pickupCoords, setPickupCoords] = useState(DEFAULT_COORDS);
@@ -185,6 +192,7 @@ export default function NewOrderScreen({ navigation }) {
     const initialize = async () => {
       const isAvailable = await testGoogleMapsAccess();
       setIsGoogleMapsActive(isAvailable);
+      setEngineChecked(true);
 
       await fetchTransportModes();
       await triggerAutoGps(isAvailable);
@@ -192,6 +200,13 @@ export default function NewOrderScreen({ navigation }) {
 
     initialize();
   }, []);
+
+  // Sécurité : ne jamais laisser le spinner indéfiniment si la carte ne signale rien
+  useEffect(() => {
+    if (!engineChecked || mapReady) return;
+    const timer = setTimeout(() => setMapReady(true), 12000);
+    return () => clearTimeout(timer);
+  }, [engineChecked, mapReady, isGoogleMapsActive]);
 
   const fetchTransportModes = async () => {
     try {
@@ -371,7 +386,7 @@ export default function NewOrderScreen({ navigation }) {
 
   const handleOpenOrderPopup = () => {
     if (!destinationText.trim()) {
-      Alert.alert(t("appName"), t("destinationPlaceholder"));
+      Alert.alert(t("errorTitle"), t("errDestination"));
       return;
     }
     setPhoneErrorText("");
@@ -379,6 +394,11 @@ export default function NewOrderScreen({ navigation }) {
   };
 
   const handleConfirmOrder = async () => {
+    const needsSenderPhone = !user?.phone;
+    if (needsSenderPhone && !isValidAlgerianMobile(senderPhone)) {
+      setSenderPhoneError(t("errPhone"));
+      return;
+    }
     if (!isValidAlgerianMobile(recipientPhone)) {
       setPhoneErrorText(t("errPhone"));
       return;
@@ -386,6 +406,17 @@ export default function NewOrderScreen({ navigation }) {
     setDetailsModalVisible(false);
     setSubmitting(true);
     try {
+      if (needsSenderPhone) {
+        const phoneRes = await apiClient.post("auth.php?action=update_phone", {
+          phone: senderPhone,
+        });
+        if (!phoneRes.data?.success) {
+          setSenderPhoneError(phoneRes.data?.error || t("errPhone"));
+          setDetailsModalVisible(true);
+          return;
+        }
+        await updateUser({ phone: phoneRes.data.phone });
+      }
       let finalDelivCoords = deliveryCoords;
       if (!finalDelivCoords) {
         finalDelivCoords = {
@@ -482,6 +513,12 @@ export default function NewOrderScreen({ navigation }) {
             zoom: 14,
             disableDefaultUI: true,
             gestureHandling: 'greedy'
+          });
+
+          google.maps.event.addListenerOnce(map, 'tilesloaded', function() {
+            if (window.ReactNativeWebView) {
+              window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'MAP_READY' }));
+            }
           });
 
           directionsService = new google.maps.DirectionsService();
@@ -703,7 +740,12 @@ export default function NewOrderScreen({ navigation }) {
       <div id="map"></div>
       <script>
         var map = L.map('map', { zoomControl: false }).setView([${pickupCoords.lat}, ${pickupCoords.lon}], 14);
-        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+        var osmTiles = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', { maxZoom: 19 }).addTo(map);
+        osmTiles.once('load', function() {
+          if (window.ReactNativeWebView) {
+            window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'MAP_READY' }));
+          }
+        });
 
         var greenIcon = L.divIcon({
           html: '<div style="width:18px;height:18px;background:#16A34A;border:3px solid #fff;border-radius:50%;box-shadow:0 2px 6px rgba(0,0,0,0.45);"></div>',
@@ -787,6 +829,7 @@ export default function NewOrderScreen({ navigation }) {
     <View style={styles.container}>
       {/* 1. CARTE (Pleine page en arrière-plan) */}
       <View style={styles.mapContainer}>
+        {engineChecked && (
         <WebView
           key={isGoogleMapsActive ? "google-map" : "osm-map"}
           ref={webViewRef}
@@ -823,15 +866,24 @@ export default function NewOrderScreen({ navigation }) {
                 }
               } else if (msg.type === "ROUTE_CALCULATED" && msg.distance > 0) {
                 setDistanceKm(msg.distance);
+              } else if (msg.type === "MAP_READY") {
+                setMapReady(true);
               } else if (msg.type === "GOOGLE_AUTH_FAILED") {
                 console.warn(
                   "Échec d'authentification Google Maps -> Bascule automatique sur OpenStreetMap",
                 );
+                setMapReady(false);
                 setIsGoogleMapsActive(false);
               }
             } catch (e) {}
           }}
         />
+        )}
+        {(!engineChecked || !mapReady) && (
+          <View style={styles.mapLoader}>
+            <ActivityIndicator size="large" color="#4F46E5" />
+          </View>
+        )}
       </View>
 
       {/* 2. BARRE DE DÉPART ET D'ARRIVÉE */}
@@ -1091,6 +1143,43 @@ export default function NewOrderScreen({ navigation }) {
                 })}
               </View>
 
+              {!user?.phone && (
+                <>
+                  <Text
+                    style={[
+                      styles.inputSubLabel,
+                      { textAlign: textAlignDir, marginTop: 12 },
+                    ]}
+                  >
+                    Votre numéro de téléphone (obligatoire)
+                  </Text>
+                  <TextInput
+                    style={[
+                      styles.popupInput,
+                      { textAlign: textAlignDir },
+                      senderPhoneError
+                        ? { borderColor: COLORS.danger, backgroundColor: "#FEF2F2" }
+                        : null,
+                    ]}
+                    placeholder="05 / 06 / 07 XX XX XX XX"
+                    placeholderTextColor="#94A3B8"
+                    keyboardType="phone-pad"
+                    maxLength={10}
+                    value={senderPhone}
+                    onChangeText={(txt) => {
+                      const cleaned = txt.replace(/[^0-9]/g, "");
+                      setSenderPhone(cleaned);
+                      if (isValidAlgerianMobile(cleaned)) setSenderPhoneError("");
+                    }}
+                  />
+                  {senderPhoneError ? (
+                    <Text style={[styles.errorHelper, { textAlign: textAlignDir }]}>
+                      {senderPhoneError}
+                    </Text>
+                  ) : null}
+                </>
+              )}
+
               <Text
                 style={[
                   styles.inputSubLabel,
@@ -1217,6 +1306,12 @@ const styles = StyleSheet.create({
     zIndex: 1,
   },
   map: { flex: 1, width: "100%", height: "100%" },
+  mapLoader: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "#E5E7EB",
+    alignItems: "center",
+    justifyContent: "center",
+  },
   topOverlay: {
     paddingTop: Platform.OS === "ios" ? 48 : 36,
     paddingHorizontal: 14,

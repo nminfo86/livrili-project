@@ -33,7 +33,7 @@ function getAuthenticatedUser(PDO $pdo)
     }
 
     if (!empty($token)) {
-        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE auth_token = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM app_users WHERE auth_token = ? LIMIT 1");
         $stmt->execute([$token]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($user) return $user;
@@ -42,7 +42,7 @@ function getAuthenticatedUser(PDO $pdo)
     // 3. Fallback de secours via user_id
     $userId = intval($_GET['user_id'] ?? $_POST['user_id'] ?? $rawInput['user_id'] ?? 0);
     if ($userId > 0) {
-        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ? LIMIT 1");
+        $stmt = $pdo->prepare("SELECT * FROM app_users WHERE id = ? LIMIT 1");
         $stmt->execute([$userId]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
         if ($user) return $user;
@@ -79,7 +79,7 @@ if ($action === 'register') {
         $vType = 'moto';
     }
 
-    $stmtCheck = $pdo->prepare("SELECT id, verification_status FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
+    $stmtCheck = $pdo->prepare("SELECT id, verification_status FROM driver_profiles WHERE app_user_id = :uid LIMIT 1");
     $stmtCheck->execute(['uid' => $user['id']]);
     $existing = $stmtCheck->fetch();
     if ($existing) {
@@ -99,7 +99,7 @@ if ($action === 'register') {
     }
 
     $sql = "INSERT INTO driver_profiles (
-                telegram_user_id, full_name, phone, wilaya_code, commune_name,
+                app_user_id, full_name, phone, wilaya_code, commune_name,
                 vehicle_type, moto_brand, moto_color, plate_number, photo_moto,
                 verification_status, is_online, rating, created_at
             ) VALUES (
@@ -121,14 +121,14 @@ if ($action === 'register') {
         'photo'   => $relPath
     ]);
 
-    $pdo->prepare("UPDATE telegram_users SET role = 'driver', current_mode = 'driver' WHERE id = :id")
+    $pdo->prepare("UPDATE app_users SET role = 'driver', current_mode = 'driver' WHERE id = :id")
         ->execute(['id' => $user['id']]);
 
     jsonResponse(['success' => true, 'message' => 'Compte livreur activé avec succès']);
 }
 
 // Récupération du profil chauffeur pour les actions suivantes
-$stmtD = $pdo->prepare("SELECT * FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
+$stmtD = $pdo->prepare("SELECT * FROM driver_profiles WHERE app_user_id = :uid LIMIT 1");
 $stmtD->execute(['uid' => $user['id']]);
 $driver = $stmtD->fetch(PDO::FETCH_ASSOC);
 
@@ -197,7 +197,7 @@ if ($action === 'update_gps') {
 
     if ($lat && $lon) {
         $stmtGps = $pdo->prepare("
-            UPDATE telegram_users 
+            UPDATE app_users 
             SET latitude = :lat, longitude = :lon, gps_updated_at = NOW() 
             WHERE id = :id
         ");
@@ -284,14 +284,16 @@ if ($action === 'driver_bids') {
                    tu.phone AS client_phone, tu.full_name AS client_name
             FROM parcel_bids pb
             JOIN parcel_orders po ON pb.parcel_order_id = po.id
-            JOIN telegram_users tu ON po.sender_telegram_id = tu.id
+            JOIN app_users tu ON po.sender_id = tu.id
             WHERE pb.driver_id = :did
+              AND pb.status <> 'rejected'
+              AND (po.selected_driver_id IS NULL OR po.selected_driver_id = :did2)
               AND pb.created_at >= (NOW() - INTERVAL 24 HOUR)
               AND (po.status <> 'DELIVERED' OR DATE(po.delivered_at) = CURDATE())
             ORDER BY (po.status = 'DELIVERED') ASC, pb.id DESC";
 
     $stmt = $pdo->prepare($sql);
-    $stmt->execute(['did' => $driver['id']]);
+    $stmt->execute(['did' => $driver['id'], 'did2' => $driver['id']]);
 
     $bidsData = $stmt->fetchAll(PDO::FETCH_ASSOC);
     foreach ($bidsData as &$b) {
@@ -338,29 +340,29 @@ if ($action === 'submit_bid') {
             ->execute(['oid' => $orderId, 'did' => $driver['id'], 'amt' => $amount]);
     }
 
-    // sender_telegram_id stocke soit telegram_users.id soit telegram_users.telegram_id
     $stmtClient = $pdo->prepare("
-        SELECT u.push_token, po.code 
+        SELECT u.id AS user_id, u.push_token, po.code 
         FROM parcel_orders po
-        INNER JOIN telegram_users u ON (u.id = po.sender_telegram_id OR u.telegram_id = po.sender_telegram_id)
+        INNER JOIN app_users u ON u.id = po.sender_id
         WHERE po.id = :order_id
         LIMIT 1
     ");
     $stmtClient->execute([':order_id' => $orderId]);
     $clientInfo = $stmtClient->fetch(PDO::FETCH_ASSOC);
 
-    if ($clientInfo && !empty($clientInfo['push_token'])) {
-        sendExpoPushNotifications(
-            $clientInfo['push_token'],
-            "🛵 Nouvelle offre pour votre commande #{$clientInfo['code']}",
-            "Un livreur propose de livrer votre colis pour {$amount} DA. Appuyez pour voir.",
-            [
-                'type'       => 'NEW_BID',
-                'screen'     => 'Orders',
-                'orderId'    => (int)$orderId,
-                'targetRole' => 'customer'
-            ]
-        );
+    if ($clientInfo) {
+        $title = "🛵 Nouvelle offre pour votre commande #{$clientInfo['code']}";
+        $body  = "Un livreur propose de livrer votre colis pour {$amount} DA. Appuyez pour voir.";
+        $data  = [
+            'type'       => 'NEW_BID',
+            'screen'     => 'Orders',
+            'orderId'    => (int)$orderId,
+            'targetRole' => 'customer'
+        ];
+        storeNotification($pdo, (int)$clientInfo['user_id'], $title, $body, $data);
+        if (!empty($clientInfo['push_token'])) {
+            sendExpoPushNotifications($clientInfo['push_token'], $title, $body, $data);
+        }
     }
 
     jsonResponse(['success' => true]);
@@ -397,35 +399,34 @@ if ($action === 'update_step') {
     }
 
     $stmtClient = $pdo->prepare("
-    SELECT u.push_token, po.code 
+    SELECT u.id AS user_id, u.push_token, po.code 
     FROM parcel_orders po
-    INNER JOIN telegram_users u ON (u.id = po.sender_telegram_id OR u.telegram_id = po.sender_telegram_id)
+    INNER JOIN app_users u ON u.id = po.sender_id
     WHERE po.id = :order_id
     LIMIT 1
 ");
     $stmtClient->execute([':order_id' => $orderId]);
     $clientInfo = $stmtClient->fetch(PDO::FETCH_ASSOC);
 
-    if ($clientInfo && !empty($clientInfo['push_token'])) {
+    if ($clientInfo) {
         $title = ($step === 'PICKED_UP')
             ? "📦 Colis récupéré (#{$clientInfo['code']})"
             : "🎉 Colis livré avec succès (#{$clientInfo['code']})";
         $body = ($step === 'PICKED_UP')
             ? "Le livreur a récupéré votre colis et est en route vers la destination."
             : "Votre commande #{$clientInfo['code']} a bien été livrée. Merci d'avoir utilisé Livrili !";
+        $data = [
+            'type'       => 'ORDER_STATUS_CHANGED',
+            'screen'     => 'Orders',
+            'orderId'    => (int)$orderId,
+            'status'     => $step,
+            'targetRole' => 'customer'
+        ];
 
-        sendExpoPushNotifications(
-            $clientInfo['push_token'],
-            $title,
-            $body,
-            [
-                'type'       => 'ORDER_STATUS_CHANGED',
-                'screen'     => 'Orders',
-                'orderId'    => (int)$orderId,
-                'status'     => $step,
-                'targetRole' => 'customer'
-            ]
-        );
+        storeNotification($pdo, (int)$clientInfo['user_id'], $title, $body, $data);
+        if (!empty($clientInfo['push_token'])) {
+            sendExpoPushNotifications($clientInfo['push_token'], $title, $body, $data);
+        }
     }
 
     jsonResponse(['success' => true]);

@@ -17,10 +17,14 @@ import {
 } from "react-native";
 import * as Location from "expo-location";
 import * as ImagePicker from "expo-image-picker";
+import * as WebBrowser from "expo-web-browser";
+import * as Google from "expo-auth-session/providers/google";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons, MaterialCommunityIcons, Fontisto } from "@expo/vector-icons";
 import { AuthContext } from "../../context/AuthContext";
 import { useThemeLang, COLORS } from "../../context/ThemeLanguageContext";
 import apiClient from "../../api/client";
+import { GOOGLE_ANDROID_CLIENT_ID, GOOGLE_WEB_CLIENT_ID } from "../../config/googleConfig";
 import {
   isValidLoginIdentifier,
   isValidFullName,
@@ -35,6 +39,8 @@ import {
 
 const HERO_IMAGE = require('../../../assets/login-hero.png');
 
+WebBrowser.maybeCompleteAuthSession();
+
 const LANGUAGES = [
   { code: "fr", label: "Français", short: "Français" },
   { code: "ar", label: "العربية", short: "العربية" },
@@ -44,6 +50,7 @@ const LANGUAGES = [
 export default function LoginScreen() {
   const { login } = useContext(AuthContext);
   const { t, lang, isRTL, changeLanguage } = useThemeLang();
+  const insets = useSafeAreaInsets();
 
   const [langDropdownVisible, setLangDropdownVisible] = useState(false);
   const [isRegister, setIsRegister] = useState(false);
@@ -56,6 +63,37 @@ export default function LoginScreen() {
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [submittedAttempt, setSubmittedAttempt] = useState(false);
+
+  const [googleRequest, googleResponse, promptGoogleAsync] = Google.useIdTokenAuthRequest({
+    androidClientId: GOOGLE_ANDROID_CLIENT_ID,
+    webClientId: GOOGLE_WEB_CLIENT_ID,
+  });
+
+  useEffect(() => {
+    if (googleResponse?.type === "success") {
+      const idToken = googleResponse.params?.id_token;
+      if (idToken) loginWithGoogleToken(idToken);
+    } else if (googleResponse?.type === "error") {
+      Alert.alert("Google", "Connexion Google impossible. Réessayez.");
+    }
+  }, [googleResponse]);
+
+  const loginWithGoogleToken = async (idToken) => {
+    setLoading(true);
+    try {
+      const res = await apiClient.post("auth.php?action=google_login", { id_token: idToken });
+      const data = res.data;
+      if (data?.token) {
+        await login(data.token, data.user);
+      } else {
+        Alert.alert("Erreur", data?.error || "Connexion Google refusée.");
+      }
+    } catch (err) {
+      Alert.alert("Erreur", err.response?.data?.error || "Connexion Google impossible.");
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // État de suivi "champ quitté" (Blur)
   const [touched, setTouched] = useState({
@@ -315,7 +353,8 @@ export default function LoginScreen() {
   };
 
   const handleGoogleSignIn = async () => {
-    Alert.alert("Google", "Connexion rapide avec votre compte Google...");
+    if (!googleRequest) return;
+    await promptGoogleAsync();
   };
 
   return (
@@ -323,7 +362,13 @@ export default function LoginScreen() {
       style={styles.container}
       behavior={Platform.OS === "ios" ? "padding" : undefined}
     >
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <ScrollView
+        contentContainerStyle={[
+          styles.scrollContent,
+          { paddingTop: Math.max(42, insets.top + 12), paddingBottom: 30 + insets.bottom },
+        ]}
+        keyboardShouldPersistTaps="handled"
+      >
         {/* DROPDOWN LANGUE */}
         <View style={styles.topBar}>
           <TouchableOpacity
@@ -337,16 +382,18 @@ export default function LoginScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* ILLUSTRATION HERO */}
-        <View style={styles.heroContainer}>
-          {HERO_IMAGE ? (
-            <Image source={HERO_IMAGE} style={styles.heroImage} resizeMode="contain" />
-          ) : (
-            <View style={styles.heroFallback}>
-              <Fontisto name="motorcycle" size={80} color={COLORS.primary} />
-            </View>
-          )}
-        </View>
+        {/* ILLUSTRATION HERO (masquée en inscription) */}
+        {!isRegister && (
+          <View style={styles.heroContainer}>
+            {HERO_IMAGE ? (
+              <Image source={HERO_IMAGE} style={styles.heroImage} resizeMode="contain" />
+            ) : (
+              <View style={styles.heroFallback}>
+                <Fontisto name="motorcycle" size={80} color={COLORS.primary} />
+              </View>
+            )}
+          </View>
+        )}
 
         {/* FORMULAIRE */}
         <View style={styles.formContainer}>
@@ -862,26 +909,30 @@ export default function LoginScreen() {
             )}
           </TouchableOpacity>
 
-          {/* SÉPARATEUR & GOOGLE */}
-          <View style={styles.orDividerRow}>
-            <View style={styles.orLine} />
-            <Text style={styles.orText}>{t("orConnectWith") || "OU SE CONNECTER AVEC"}</Text>
-            <View style={styles.orLine} />
-          </View>
+          {/* SÉPARATEUR & GOOGLE (connexion uniquement) */}
+          {!isRegister && (
+            <>
+              <View style={styles.orDividerRow}>
+                <View style={styles.orLine} />
+                <Text style={styles.orText}>{t("orConnectWith") || "OU SE CONNECTER AVEC"}</Text>
+                <View style={styles.orLine} />
+              </View>
 
-          <View style={styles.socialCenterRow}>
-            <TouchableOpacity
-              style={styles.googleCircleBtn}
-              activeOpacity={0.8}
-              onPress={handleGoogleSignIn}
-            >
-              <Image
-                source={require('../../../assets/g-logo.png')}
-                style={styles.googleLogoImg}
-                resizeMode="contain"
-              />
-            </TouchableOpacity>
-          </View>
+              <View style={styles.socialCenterRow}>
+                <TouchableOpacity
+                  style={styles.googleCircleBtn}
+                  activeOpacity={0.8}
+                  onPress={handleGoogleSignIn}
+                >
+                  <Image
+                    source={require('../../../assets/g-logo.png')}
+                    style={styles.googleLogoImg}
+                    resizeMode="contain"
+                  />
+                </TouchableOpacity>
+              </View>
+            </>
+          )}
 
           {/* LIENS DU BAS */}
           <View style={[styles.bottomLinksRow, { flexDirection: rowDir }]}>

@@ -29,7 +29,7 @@ if ($action === 'register') {
         @unlink($otpFile);
     }
 
-    $chk = $pdo->prepare("SELECT id FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    $chk = $pdo->prepare("SELECT id FROM app_users WHERE email = ? OR phone = ? LIMIT 1");
     $chk->execute([$email, $phone]);
     if ($chk->fetch()) {
         http_response_code(400);
@@ -45,7 +45,7 @@ if ($action === 'register') {
     $commune = trim($input['commune_name'] ?? 'El Eulma');
 
     $ins = $pdo->prepare("
-        INSERT INTO telegram_users 
+        INSERT INTO app_users 
         (full_name, phone, email, password_hash, auth_token, role, current_mode, status, latitude, longitude, commune_name, gps_updated_at)
         VALUES (?, ?, ?, ?, ?, ?, ?, 'active', ?, ?, ?, NOW())
     ");
@@ -79,7 +79,7 @@ if ($action === 'register') {
 
         $drvIns = $pdo->prepare("
             INSERT INTO driver_profiles
-            (telegram_user_id, full_name, phone, wilaya_code, commune_name, vehicle_type, moto_brand, moto_color, plate_number, photo_moto, verification_status, is_online)
+            (app_user_id, full_name, phone, wilaya_code, commune_name, vehicle_type, moto_brand, moto_color, plate_number, photo_moto, verification_status, is_online)
             VALUES (?, ?, ?, 19, ?, ?, ?, ?, ?, ?, 'approved', 1)
         ");
         $drvIns->execute([
@@ -95,7 +95,7 @@ if ($action === 'register') {
         ]);
     }
 
-    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ?");
+    $stmt = $pdo->prepare("SELECT * FROM app_users WHERE id = ?");
     $stmt->execute([$userId]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
     unset($user['password_hash']);
@@ -128,7 +128,7 @@ if ($action === 'upgrade_to_driver') {
         $vType = 'moto';
     }
 
-    $stmtCheck = $pdo->prepare("SELECT id FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
+    $stmtCheck = $pdo->prepare("SELECT id FROM driver_profiles WHERE app_user_id = :uid LIMIT 1");
     $stmtCheck->execute(['uid' => $user['id']]);
     $existingId = $stmtCheck->fetchColumn();
 
@@ -141,7 +141,7 @@ if ($action === 'upgrade_to_driver') {
     } else {
         $pdo->prepare("
             INSERT INTO driver_profiles (
-                telegram_user_id, full_name, phone, wilaya_code, commune_name,
+                app_user_id, full_name, phone, wilaya_code, commune_name,
                 vehicle_type, moto_brand, moto_color, plate_number, photo_moto,
                 verification_status, is_online, rating, created_at
             ) VALUES (
@@ -161,7 +161,7 @@ if ($action === 'upgrade_to_driver') {
         ]);
     }
 
-    $pdo->prepare("UPDATE telegram_users SET role = 'driver', current_mode = 'driver', commune_name = :c, latitude = :lat, longitude = :lon, gps_updated_at = NOW() WHERE id = :uid")
+    $pdo->prepare("UPDATE app_users SET role = 'driver', current_mode = 'driver', commune_name = :c, latitude = :lat, longitude = :lon, gps_updated_at = NOW() WHERE id = :uid")
         ->execute(['c' => $commune, 'lat' => $lat, 'lon' => $lon, 'uid' => $user['id']]);
 
     jsonResponse([
@@ -191,7 +191,7 @@ if ($action === 'send_otp') {
     }
 
     // Vérifier si l'email ou le téléphone existe déjà
-    $chk = $pdo->prepare("SELECT id FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    $chk = $pdo->prepare("SELECT id FROM app_users WHERE email = ? OR phone = ? LIMIT 1");
     $chk->execute([$email, $phone]);
     if ($chk->fetch()) {
         http_response_code(400);
@@ -230,8 +230,8 @@ if ($action === 'forgot_password') {
         exit;
     }
 
-    // Chercher l'utilisateur par email ou téléphone dans telegram_users
-    $stmt = $pdo->prepare("SELECT id, full_name, email, phone FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    // Chercher l'utilisateur par email ou téléphone dans app_users
+    $stmt = $pdo->prepare("SELECT id, full_name, email, phone FROM app_users WHERE email = ? OR phone = ? LIMIT 1");
     $stmt->execute([strtolower($identifier), $identifier]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -244,7 +244,7 @@ if ($action === 'forgot_password') {
     // Générer le code OTP à 6 chiffres valable 10 minutes
     $otp = (string)random_int(100000, 999999);
     $upd = $pdo->prepare("
-        UPDATE telegram_users 
+        UPDATE app_users 
         SET otp_code = ?, otp_expires_at = DATE_ADD(NOW(), INTERVAL 10 MINUTE) 
         WHERE id = ?
     ");
@@ -294,7 +294,7 @@ if ($action === 'reset_password') {
         exit;
     }
 
-    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE email = ? OR phone = ? LIMIT 1");
+    $stmt = $pdo->prepare("SELECT * FROM app_users WHERE email = ? OR phone = ? LIMIT 1");
     $stmt->execute([strtolower($identifier), $identifier]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -321,7 +321,7 @@ if ($action === 'reset_password') {
     $token = bin2hex(random_bytes(32));
 
     $upd = $pdo->prepare("
-        UPDATE telegram_users 
+        UPDATE app_users 
         SET password_hash = ?, otp_code = NULL, otp_expires_at = NULL, auth_token = ? 
         WHERE id = ?
     ");
@@ -346,7 +346,7 @@ if ($action === 'login') {
     $email    = filter_var(trim($input['email'] ?? ''), FILTER_VALIDATE_EMAIL);
     $password = trim($input['password'] ?? '');
 
-    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE email = :e LIMIT 1");
+    $stmt = $pdo->prepare("SELECT * FROM app_users WHERE email = :e LIMIT 1");
     $stmt->execute(['e' => $email]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
 
@@ -355,7 +355,7 @@ if ($action === 'login') {
     }
 
     $token = bin2hex(random_bytes(32));
-    $pdo->prepare("UPDATE telegram_users SET auth_token = :tok WHERE id = :id")->execute(['tok' => $token, 'id' => $user['id']]);
+    $pdo->prepare("UPDATE app_users SET auth_token = :tok WHERE id = :id")->execute(['tok' => $token, 'id' => $user['id']]);
 
     jsonResponse([
         'success' => true,
@@ -376,31 +376,55 @@ if ($action === 'login') {
 // -------------------------------------------------------------
 // Dans api/auth.php, assurez-vous que le bloc google_login accepte l'email direct :
 if ($action === 'google_login') {
-    $email = trim($input['email'] ?? '');
-    $fullName = trim($input['full_name'] ?? 'Utilisateur Google');
-    $googleId = trim($input['google_id'] ?? ('g_' . md5($email)));
-
-    if (empty($email)) {
+    $idToken = trim($input['id_token'] ?? '');
+    if ($idToken === '') {
         http_response_code(400);
-        echo json_encode(['error' => 'Email Google manquant']);
+        echo json_encode(['error' => 'Jeton Google manquant']);
         exit;
     }
 
-    $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE email = ? OR google_id = ? LIMIT 1");
+    // Vérification du jeton auprès de Google (signature, expiration, audience)
+    $ch = curl_init('https://oauth2.googleapis.com/tokeninfo?id_token=' . urlencode($idToken));
+    curl_setopt_array($ch, [CURLOPT_RETURNTRANSFER => true, CURLOPT_TIMEOUT => 10]);
+    $raw = curl_exec($ch);
+    $httpCode = curl_getinfo($ch, CURLINFO_HTTP_CODE);
+    curl_close($ch);
+    $claims = $httpCode === 200 ? json_decode($raw, true) : null;
+
+    if (!is_array($claims)
+        || !in_array($claims['aud'] ?? '', Config::$googleClientIds, true)
+        || ($claims['email_verified'] ?? '') !== 'true'
+        || empty($claims['email'])) {
+        http_response_code(401);
+        echo json_encode(['error' => 'Jeton Google invalide.']);
+        exit;
+    }
+
+    $email    = strtolower(trim($claims['email']));
+    $fullName = trim($claims['name'] ?? '') ?: 'Utilisateur Google';
+    $googleId = trim($claims['sub']);
+
+    $stmt = $pdo->prepare("SELECT * FROM app_users WHERE email = ? OR google_id = ? LIMIT 1");
     $stmt->execute([$email, $googleId]);
     $user = $stmt->fetch(PDO::FETCH_ASSOC);
+
+    if ($user && $user['status'] !== 'active') {
+        http_response_code(403);
+        echo json_encode(['error' => 'Compte suspendu ou banni.']);
+        exit;
+    }
 
     $token = bin2hex(random_bytes(32));
 
     if ($user) {
-        $upd = $pdo->prepare("UPDATE telegram_users SET auth_token = ?, google_id = COALESCE(google_id, ?) WHERE id = ?");
+        $upd = $pdo->prepare("UPDATE app_users SET auth_token = ?, google_id = COALESCE(google_id, ?) WHERE id = ?");
         $upd->execute([$token, $googleId, $user['id']]);
         $user['auth_token'] = $token;
     } else {
-        $ins = $pdo->prepare("INSERT INTO telegram_users (full_name, email, google_id, auth_token, role, current_mode, status) VALUES (?, ?, ?, ?, 'customer', 'customer', 'active')");
+        $ins = $pdo->prepare("INSERT INTO app_users (full_name, email, google_id, auth_token, role, current_mode, status) VALUES (?, ?, ?, ?, 'customer', 'customer', 'active')");
         $ins->execute([$fullName, $email, $googleId, $token]);
         $newId = $pdo->lastInsertId();
-        $stmt = $pdo->prepare("SELECT * FROM telegram_users WHERE id = ?");
+        $stmt = $pdo->prepare("SELECT * FROM app_users WHERE id = ?");
         $stmt->execute([$newId]);
         $user = $stmt->fetch(PDO::FETCH_ASSOC);
     }
@@ -425,13 +449,13 @@ if ($action === 'update_phone') {
         jsonResponse(['success' => false, 'error' => 'Numéro invalide (doit commencer par 05, 06 ou 07).']);
     }
 
-    $stmtCheck = $pdo->prepare("SELECT id FROM telegram_users WHERE phone = :p AND id != :uid LIMIT 1");
+    $stmtCheck = $pdo->prepare("SELECT id FROM app_users WHERE phone = :p AND id != :uid LIMIT 1");
     $stmtCheck->execute(['p' => $phone, 'uid' => $user['id']]);
     if ($stmtCheck->fetch()) {
         jsonResponse(['success' => false, 'error' => 'Ce numéro de téléphone est déjà associé à un autre compte.']);
     }
 
-    $pdo->prepare("UPDATE telegram_users SET phone = :p WHERE id = :uid")->execute(['p' => $phone, 'uid' => $user['id']]);
+    $pdo->prepare("UPDATE app_users SET phone = :p WHERE id = :uid")->execute(['p' => $phone, 'uid' => $user['id']]);
 
     jsonResponse(['success' => true, 'phone' => $phone]);
 }
@@ -456,20 +480,20 @@ if ($action === 'request_otp') {
     $expiresAt = date('Y-m-d H:i:s', strtotime('+10 minutes'));
 
     // Créer ou mettre à jour l'utilisateur
-    $stmtCheck = $pdo->prepare("SELECT id FROM telegram_users WHERE phone = :p LIMIT 1");
+    $stmtCheck = $pdo->prepare("SELECT id FROM app_users WHERE phone = :p LIMIT 1");
     $stmtCheck->execute(['p' => $phone]);
     $existing = $stmtCheck->fetch();
 
     if ($existing) {
         $stmtUp = $pdo->prepare("
-            UPDATE telegram_users 
+            UPDATE app_users 
             SET email = :email, otp_code = :otp, otp_expires_at = :exp 
             WHERE id = :id
         ");
         $stmtUp->execute(['email' => $email, 'otp' => $otp, 'exp' => $expiresAt, 'id' => $existing['id']]);
     } else {
         $stmtIns = $pdo->prepare("
-            INSERT INTO telegram_users (phone, email, otp_code, otp_expires_at, role, current_mode, status, lang, created_at)
+            INSERT INTO app_users (phone, email, otp_code, otp_expires_at, role, current_mode, status, lang, created_at)
             VALUES (:p, :email, :otp, :exp, 'customer', 'customer', 'active', 'fr', NOW())
         ");
         $stmtIns->execute(['p' => $phone, 'email' => $email, 'otp' => $otp, 'exp' => $expiresAt]);
@@ -515,8 +539,8 @@ if ($action === 'verify_otp') {
 
     $stmt = $pdo->prepare("
         SELECT tu.*, dp.id AS driver_id, dp.verification_status, dp.vehicle_type, dp.is_online, dp.rating, dp.commune_name AS driver_commune
-        FROM telegram_users tu
-        LEFT JOIN driver_profiles dp ON dp.telegram_user_id = tu.id
+        FROM app_users tu
+        LEFT JOIN driver_profiles dp ON dp.app_user_id = tu.id
         WHERE tu.phone = :p AND tu.otp_code = :otp AND tu.otp_expires_at >= NOW()
         LIMIT 1
     ");
@@ -531,7 +555,7 @@ if ($action === 'verify_otp') {
     $authToken = bin2hex(random_bytes(32));
 
     // Suppression du code consommé et enregistrement du jeton
-    $pdo->prepare("UPDATE telegram_users SET auth_token = :token, otp_code = NULL, otp_expires_at = NULL WHERE id = :id")
+    $pdo->prepare("UPDATE app_users SET auth_token = :token, otp_code = NULL, otp_expires_at = NULL WHERE id = :id")
         ->execute(['token' => $authToken, 'id' => $user['id']]);
 
     jsonResponse([
@@ -594,10 +618,59 @@ if ($action === 'switch_mode') {
         jsonResponse(['success' => false, 'error' => 'Vous n\'êtes pas encore inscrit en tant que transporteur']);
     }
 
-    $pdo->prepare("UPDATE telegram_users SET current_mode = :m WHERE id = :id")
+    $pdo->prepare("UPDATE app_users SET current_mode = :m WHERE id = :id")
         ->execute(['m' => $newMode, 'id' => $user['id']]);
 
     jsonResponse(['success' => true, 'current_mode' => $newMode]);
+}
+
+// -------------------------------------------------------------------------
+// BOÎTE DE NOTIFICATIONS (liste + compteur de non lues, par mode client / livreur)
+// -------------------------------------------------------------------------
+if ($action === 'notifications') {
+    $user = requireAuth($pdo);
+    $role = ($_GET['role'] ?? '') === 'driver' ? 'driver' : 'customer';
+
+    $stmt = $pdo->prepare("
+        SELECT id, type, title, body, data, is_read, created_at
+        FROM notifications
+        WHERE user_id = :uid AND target_role = :role AND DATE(created_at) = CURDATE()
+        ORDER BY id DESC LIMIT 50
+    ");
+    $stmt->execute(['uid' => $user['id'], 'role' => $role]);
+    $items = $stmt->fetchAll(PDO::FETCH_ASSOC);
+    foreach ($items as &$n) {
+        $n['id'] = (int)$n['id'];
+        $n['is_read'] = (int)$n['is_read'];
+        $n['data'] = $n['data'] ? json_decode($n['data'], true) : null;
+    }
+    unset($n);
+
+    $stmtCount = $pdo->prepare("SELECT COUNT(*) FROM notifications WHERE user_id = :uid AND target_role = :role AND is_read = 0 AND DATE(created_at) = CURDATE()");
+    $stmtCount->execute(['uid' => $user['id'], 'role' => $role]);
+
+    jsonResponse([
+        'success'      => true,
+        'unread_count' => (int)$stmtCount->fetchColumn(),
+        'notifications' => $items
+    ]);
+}
+
+if ($action === 'mark_notifications_read') {
+    $user = requireAuth($pdo);
+    $role = ($input['role'] ?? '') === 'driver' ? 'driver' : 'customer';
+    $ids  = array_values(array_filter(array_map('intval', (array)($input['ids'] ?? [])), fn($i) => $i > 0));
+
+    if (!empty($ids)) {
+        $marks = implode(',', array_fill(0, count($ids), '?'));
+        $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND target_role = ? AND id IN ($marks)")
+            ->execute(array_merge([$user['id'], $role], $ids));
+    } else {
+        $pdo->prepare("UPDATE notifications SET is_read = 1 WHERE user_id = ? AND target_role = ?")
+            ->execute([$user['id'], $role]);
+    }
+
+    jsonResponse(['success' => true]);
 }
 
 // -------------------------------------------------------------------------
@@ -611,7 +684,7 @@ if ($action === 'save_push_token') {
     $input = json_decode(file_get_contents('php://input'), true);
     $pushToken = isset($input['push_token']) ? trim($input['push_token']) : null;
 
-    $stmt = $pdo->prepare("UPDATE telegram_users SET push_token = :token WHERE id = :id");
+    $stmt = $pdo->prepare("UPDATE app_users SET push_token = :token WHERE id = :id");
     $stmt->execute([
         ':token' => $pushToken,
         ':id'    => $user['id']
@@ -641,7 +714,7 @@ if ($action === 'upgrade_to_driver') {
         $vType = 'moto';
     }
 
-    $stmtCheck = $pdo->prepare("SELECT id FROM driver_profiles WHERE telegram_user_id = :uid LIMIT 1");
+    $stmtCheck = $pdo->prepare("SELECT id FROM driver_profiles WHERE app_user_id = :uid LIMIT 1");
     $stmtCheck->execute(['uid' => $user['id']]);
     $existingId = $stmtCheck->fetchColumn();
 
@@ -654,7 +727,7 @@ if ($action === 'upgrade_to_driver') {
     } else {
         $pdo->prepare("
             INSERT INTO driver_profiles (
-                telegram_user_id, full_name, phone, wilaya_code, commune_name,
+                app_user_id, full_name, phone, wilaya_code, commune_name,
                 vehicle_type, moto_brand, moto_color, plate_number, photo_moto,
                 verification_status, is_online, rating, created_at
             ) VALUES (
@@ -674,7 +747,7 @@ if ($action === 'upgrade_to_driver') {
         ]);
     }
 
-    $pdo->prepare("UPDATE telegram_users SET role = 'driver', current_mode = 'driver', commune_name = :c, latitude = :lat, longitude = :lon, gps_updated_at = NOW() WHERE id = :uid")
+    $pdo->prepare("UPDATE app_users SET role = 'driver', current_mode = 'driver', commune_name = :c, latitude = :lat, longitude = :lon, gps_updated_at = NOW() WHERE id = :uid")
         ->execute(['c' => $commune, 'lat' => $lat, 'lon' => $lon, 'uid' => $user['id']]);
 
     jsonResponse([

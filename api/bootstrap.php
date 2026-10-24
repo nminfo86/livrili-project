@@ -49,8 +49,8 @@ function requireAuth(PDO $pdo): array {
     $token = $matches[1];
     $stmt = $pdo->prepare("
         SELECT tu.*, dp.id AS driver_id, dp.verification_status, dp.vehicle_type, dp.is_online, dp.rating
-        FROM telegram_users tu
-        LEFT JOIN driver_profiles dp ON dp.telegram_user_id = tu.id
+        FROM app_users tu
+        LEFT JOIN driver_profiles dp ON dp.app_user_id = tu.id
         WHERE tu.auth_token = :token AND tu.status = 'active'
         LIMIT 1
     ");
@@ -69,4 +69,26 @@ function requireAuth(PDO $pdo): array {
  */
 function sendPushNotification(?string $expoPushToken, string $title, string $body, array $extraData = []): bool {
     return sendExpoPushNotifications($expoPushToken, $title, $body, $extraData) !== false;
+}
+
+/**
+ * Enregistre une notification dans la boîte de réception de l'utilisateur (le rôle cible vient de $data['targetRole'])
+ */
+function storeNotification(PDO $pdo, int $userId, string $title, string $body, array $data = []): void {
+    $role = ($data['targetRole'] ?? 'customer') === 'driver' ? 'driver' : 'customer';
+    try {
+        $pdo->prepare("
+            INSERT INTO notifications (user_id, target_role, type, title, body, data)
+            VALUES (:uid, :role, :type, :title, :body, :data)
+        ")->execute([
+            'uid'   => $userId,
+            'role'  => $role,
+            'type'  => substr((string)($data['type'] ?? 'INFO'), 0, 40),
+            'title' => mb_substr($title, 0, 150),
+            'body'  => mb_substr($body, 0, 500),
+            'data'  => json_encode($data, JSON_UNESCAPED_UNICODE),
+        ]);
+    } catch (PDOException $e) {
+        error_log('[notifications] ' . $e->getMessage());
+    }
 }
